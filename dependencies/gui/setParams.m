@@ -8,7 +8,7 @@ switch fnName
         params.sigma_px = 1.33;          tooltips.sigma_px = 'Estimated radius of the PSF (gaussian sigma)';
         params.nmfIter = 2;              tooltips.nmfIter = 'number of iterations of NMF refinement';
         params.dXY = 3;                  tooltips.dXY = 'how large sources can be (radius), pixels';
-        params.photonScale = [];              tooltips.photonScale = 'roughly the single-photon amplitude. Leave empty to use default/estimate from data.';
+        params.photonScale = [];              tooltips.photonScale = 'roughly the single-photon amplitude. Leave empty to estimate from data or, for SLAP2, use default of 25';
         % params.minBaseline = 1/10;              tooltips.minBaseline = 'minimum baseline for source extraction (normalized photon units)';
         params.lambda = 0.9;              tooltips.lambda = 'regularizer for source extraction';
         params.phi = 0;                 tooltips.phi = 'parameter for how much to relax L1 during debiasing';
