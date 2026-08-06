@@ -329,17 +329,18 @@ end
 % lb≈ub pinching, which breaks trust-region-reflective (trdog/quad1d).
 free = S_est_new >= 1e-1;
 S_est_new(~free) = 0;
-opts.MaxIterations = 10*params.nmfIter;
 if any(free(:))
     free_idx = find(free);
     szS = size(S_est_new);
     x0 = S_est_new(free);
     lambdaDebias = params.lambda * params.phi;
-    objS = @(x) objfun_S_free(x, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
-    opts.HessianMultiplyFcn = @(hinfo, v, varargin) ...
+    optsDebias = opts;
+    optsDebias.MaxIterations = 10*params.nmfIter;
+    optsDebias.TypicalX = typicalX(free);
+    optsDebias.HessianMultiplyFcn = @(hinfo, v, varargin) ...
         hessmult_S_free(hinfo, v, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
-    opts.TypicalX = typicalX(free);
-    x = fmincon(objS, x0, [], [], [], [], -eps*ones(size(x0)), inf(size(x0)), [], opts);
+    objS = @(x) objfun_S_free(x, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
+    x = fmincon(objS, x0, [], [], [], [], -eps*ones(size(x0)), inf(size(x0)), [], optsDebias);
     S_est_new(free) = x;
 end
 
