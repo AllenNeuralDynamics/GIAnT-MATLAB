@@ -340,7 +340,7 @@ if any(free(:))
     optsDebias.HessianMultiplyFcn = @(hinfo, v, varargin) ...
         hessmult_S_free(hinfo, v, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
     objS = @(x) objfun_S_free(x, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
-    x = fmincon(objS, x0, [], [], [], [], -eps*ones(size(x0)), inf(size(x0)), [], optsDebias);
+    x = fmincon(objS, x0, [], [], [], [], problemS.lb(free), problemS.ub(free), [], optsDebias);
     S_est_new(free) = x;
 end
 
@@ -370,11 +370,31 @@ dFls = H_est\(Y_obs-B_est);
 if ~isempty(Y2) % two-channel recording, process calcium data with same source footprints
     %fit initial baseline
     B2 = max(params.minBaseline, splitFreq(Y2, params.denoiseWindow_samps, ceil(params.baselineWindow_samps/params.denoiseWindow_samps)));
+    typicalX2 = sqrt(mean((Y2(:,1:100)-B2(:,1:100)).^2,'all'))*ones(num_sources,num_time_points);
+    opts.TypicalX = typicalX2;
     opts.HessianMultiplyFcn = @(hinfo, v, flag) hessmult_S_wrapper(hinfo, Y2, H_est, B2, params.k2, Finv, params.lambda, v); %hessmult_S_wrapper takes (Svec, Z, H, B, k, F, lambda, v)
     opts.MaxIterations = 15;
     LS2 = H_est\(Y2-B2);
     objS = @(x) objfun_S_wrapper(x, Y2, H_est, B2, params.k2, Finv, params.lambda);
     [S2, ~] = fmincon(objS, LS2, [], [], [], [], problemS.lb, problemS.ub, [], opts);
+
+    % Debias channel 2 on its own support (separate from channel 1)
+    free2 = S2 >= 1e-1;
+    S2(~free2) = 0;
+    if any(free2(:))
+        free_idx2 = find(free2);
+        szS2 = size(S2);
+        x0 = S2(free2);
+        lambdaDebias = params.lambda * params.phi;
+        optsDebias = opts;
+        optsDebias.MaxIterations = 10*params.nmfIter;
+        optsDebias.TypicalX = typicalX2(free2);
+        optsDebias.HessianMultiplyFcn = @(hinfo, v, varargin) ...
+            hessmult_S_free(hinfo, v, free_idx2, szS2, Y2, H_est, B2, params.k2, Finv, lambdaDebias);
+        objS = @(x) objfun_S_free(x, free_idx2, szS2, Y2, H_est, B2, params.k2, Finv, lambdaDebias);
+        x = fmincon(objS, x0, [], [], [], [], problemS.lb(free2), problemS.ub(free2), [], optsDebias);
+        S2(free2) = x;
+    end
     
     %X2 = convn(S2, params.k2, 'same'); %update X2
     
