@@ -98,13 +98,15 @@ for problemIx = 1:nProblems %9
 end
 
 if doParallel
-    varargout{1} = afterAll(analysisFutures,@(x)assembleResults(x, pxList_p, selIdxs, sourceList, numel(sources.R), size(Y_obs,2)),6, "PassFuture",true);
+    % Capture scale used for this trial (may have been estimated above).
+    photonScale = params.photonScale;
+    varargout{1} = afterAll(analysisFutures,@(x)assembleResults(x, pxList_p, selIdxs, sourceList, numel(sources.R), size(Y_obs,2), photonScale),6, "PassFuture",true);
 else
     varargout = {H,B,S,LS,F0,SNR}; %#ok<USENS>
 end
 end
 
-function [H,B,S,LS,F0,SNR] = assembleResults(analysisFutures, pxList_p, selIdxs, sourceList, nSources, nTimepoints)
+function [H,B,S,LS,F0,SNR] = assembleResults(analysisFutures, pxList_p, selIdxs, sourceList, nSources, nTimepoints, photonScale)
 %assemble results
 %sz = CC.ImageSize;
 nFutures = length(analysisFutures);
@@ -137,6 +139,13 @@ for j = 1:nFutures
     end
     SNR(sourceList{idx}) = SNRi;
 end
+
+% Restore movie fluorescence units (optimization ran in photon-normalized space).
+% H and SNR are scale-invariant / sum-normalized and are left unchanged.
+B = B .* photonScale;
+S = S .* photonScale;
+LS = LS .* photonScale;
+F0 = F0 .* photonScale;
 end
 
 
