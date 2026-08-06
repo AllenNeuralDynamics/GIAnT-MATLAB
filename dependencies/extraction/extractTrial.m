@@ -325,20 +325,23 @@ for outerLoop = 1:params.nmfIter
     S_est = S_est_new;
 end
 
-%debiasing L1 step
-problemS.ub(S_est_new < 1e-1) = eps;
+% Debias: freeze small events, refit free set (phi=0 => no L1). Avoids
+% lb≈ub pinching, which breaks trust-region-reflective (trdog/quad1d).
+free = S_est_new >= 1e-1;
+S_est_new(~free) = 0;
 opts.MaxIterations = 10*params.nmfIter;
-
-%SOLVE FOR S
-opts.TypicalX = typicalX;
-% Objective function handle (returns [f,g, Hinfo])
-objS = @(x) objfun_S_wrapper(x, Y_obs, H_est, B_est, params.k, Finv, params.lambda*params.phi);
-
-% Hessian multiply for fmincon signature (x,y,flag)
-opts.HessianMultiplyFcn = @(hinfo, v, flag) hessmult_S_wrapper(hinfo, Y_obs, H_est, B_est, params.k, Finv, params.lambda*params.phi, v); %hessmult_S_wrapper takes (Svec, Z, H, B, k, F, lambda, v)
-
-% Call fmincon
-[S_est_new, lossS] = fmincon(objS, S_est_new, [], [], [], [], problemS.lb, problemS.ub, [], opts);
+if any(free(:))
+    free_idx = find(free);
+    szS = size(S_est_new);
+    x0 = S_est_new(free);
+    lambdaDebias = params.lambda * params.phi;
+    objS = @(x) objfun_S_free(x, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
+    opts.HessianMultiplyFcn = @(hinfo, v, varargin) ...
+        hessmult_S_free(hinfo, v, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
+    opts.TypicalX = typicalX(free);
+    x = fmincon(objS, x0, [], [], [], [], -eps*ones(size(x0)), inf(size(x0)), [], opts);
+    S_est_new(free) = x;
+end
 
 %update X
 X_est_new = convn(S_est_new, params.k, 'same');
@@ -696,6 +699,32 @@ function HvS = hessmult_S_wrapper(S, Z, H, B, k, F, lambda, v)
 % if ~isreal(HvS)
 %     keyboard
 % end
+end
+
+function [f, g, Hinfo] = objfun_S_free(x, free_idx, szS, Z, H, B, k, F, lambda)
+%OBJFUN_S_FREE Objective on free S entries only (scatter/gather into full S).
+S = zeros(szS);
+S(free_idx) = x;
+[f, gS] = objfun_S(S, Z, H, B, k, F, lambda);
+g = gS(free_idx);
+Hinfo = S;
+end
+
+function Hv = hessmult_S_free(Hinfo, v, free_idx, szS, Z, H, B, k, F, lambda)
+%HESSMULT_S_FREE Hessian-vector product on free S entries only.
+nv = size(v, 2);
+Vfull = zeros(prod(szS), nv);
+for j = 1:nv
+    tmp = zeros(szS);
+    tmp(free_idx) = v(:, j);
+    Vfull(:, j) = tmp(:);
+end
+HvFull = hessmult_S_wrapper(Hinfo, Z, H, B, k, F, lambda, Vfull);
+Hv = zeros(numel(free_idx), nv);
+for j = 1:nv
+    tmp = reshape(HvFull(:, j), szS);
+    Hv(:, j) = tmp(free_idx);
+end
 end
 
 function Xfloor = computeFloor(X, denoiseWindow, baseline)
