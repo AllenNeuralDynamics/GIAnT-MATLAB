@@ -98,13 +98,15 @@ for problemIx = 1:nProblems %9
 end
 
 if doParallel
-    varargout{1} = afterAll(analysisFutures,@(x)assembleResults(x, pxList_p, selIdxs, sourceList, numel(sources.R), size(Y_obs,2)),6, "PassFuture",true);
+    % Capture scale used for this trial (may have been estimated above).
+    photonScale = params.photonScale;
+    varargout{1} = afterAll(analysisFutures,@(x)assembleResults(x, pxList_p, selIdxs, sourceList, numel(sources.R), size(Y_obs,2), photonScale),6, "PassFuture",true);
 else
     varargout = {H,B,S,LS,F0,SNR}; %#ok<USENS>
 end
 end
 
-function [H,B,S,LS,F0,SNR] = assembleResults(analysisFutures, pxList_p, selIdxs, sourceList, nSources, nTimepoints)
+function [H,B,S,LS,F0,SNR] = assembleResults(analysisFutures, pxList_p, selIdxs, sourceList, nSources, nTimepoints, photonScale)
 %assemble results
 %sz = CC.ImageSize;
 nFutures = length(analysisFutures);
@@ -137,6 +139,13 @@ for j = 1:nFutures
     end
     SNR(sourceList{idx}) = SNRi;
 end
+
+% Restore movie fluorescence units (optimization ran in photon-normalized space).
+% H and SNR are scale-invariant / sum-normalized and are left unchanged.
+B = B .* photonScale;
+S = S .* photonScale;
+LS = LS .* photonScale;
+F0 = F0 .* photonScale;
 end
 
 
@@ -316,20 +325,24 @@ for outerLoop = 1:params.nmfIter
     S_est = S_est_new;
 end
 
-%debiasing L1 step
-problemS.ub(S_est_new < 1e-1) = eps;
-opts.MaxIterations = 10*params.nmfIter;
-
-%SOLVE FOR S
-opts.TypicalX = typicalX;
-% Objective function handle (returns [f,g, Hinfo])
-objS = @(x) objfun_S_wrapper(x, Y_obs, H_est, B_est, params.k, Finv, params.lambda*params.phi);
-
-% Hessian multiply for fmincon signature (x,y,flag)
-opts.HessianMultiplyFcn = @(hinfo, v, flag) hessmult_S_wrapper(hinfo, Y_obs, H_est, B_est, params.k, Finv, params.lambda*params.phi, v); %hessmult_S_wrapper takes (Svec, Z, H, B, k, F, lambda, v)
-
-% Call fmincon
-[S_est_new, lossS] = fmincon(objS, S_est_new, [], [], [], [], problemS.lb, problemS.ub, [], opts);
+% Debias: freeze small events, refit free set (phi=0 => no L1). Avoids
+% lb≈ub pinching, which breaks trust-region-reflective (trdog/quad1d).
+free = S_est_new >= 1e-1;
+S_est_new(~free) = 0;
+if any(free(:))
+    free_idx = find(free);
+    szS = size(S_est_new);
+    x0 = S_est_new(free);
+    lambdaDebias = params.lambda * params.phi;
+    optsDebias = opts;
+    optsDebias.MaxIterations = 10*params.nmfIter;
+    optsDebias.TypicalX = typicalX(free);
+    optsDebias.HessianMultiplyFcn = @(hinfo, v, varargin) ...
+        hessmult_S_free(hinfo, v, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
+    objS = @(x) objfun_S_free(x, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
+    x = fmincon(objS, x0, [], [], [], [], problemS.lb(free), problemS.ub(free), [], optsDebias);
+    S_est_new(free) = x;
+end
 
 %update X
 X_est_new = convn(S_est_new, params.k, 'same');
@@ -357,11 +370,31 @@ dFls = H_est\(Y_obs-B_est);
 if ~isempty(Y2) % two-channel recording, process calcium data with same source footprints
     %fit initial baseline
     B2 = max(params.minBaseline, splitFreq(Y2, params.denoiseWindow_samps, ceil(params.baselineWindow_samps/params.denoiseWindow_samps)));
+    typicalX2 = sqrt(mean((Y2(:,1:100)-B2(:,1:100)).^2,'all'))*ones(num_sources,num_time_points);
+    opts.TypicalX = typicalX2;
     opts.HessianMultiplyFcn = @(hinfo, v, flag) hessmult_S_wrapper(hinfo, Y2, H_est, B2, params.k2, Finv, params.lambda, v); %hessmult_S_wrapper takes (Svec, Z, H, B, k, F, lambda, v)
     opts.MaxIterations = 15;
     LS2 = H_est\(Y2-B2);
     objS = @(x) objfun_S_wrapper(x, Y2, H_est, B2, params.k2, Finv, params.lambda);
     [S2, ~] = fmincon(objS, LS2, [], [], [], [], problemS.lb, problemS.ub, [], opts);
+
+    % Debias channel 2 on its own support (separate from channel 1)
+    free2 = S2 >= 1e-1;
+    S2(~free2) = 0;
+    if any(free2(:))
+        free_idx2 = find(free2);
+        szS2 = size(S2);
+        x0 = S2(free2);
+        lambdaDebias = params.lambda * params.phi;
+        optsDebias = opts;
+        optsDebias.MaxIterations = 10*params.nmfIter;
+        optsDebias.TypicalX = typicalX2(free2);
+        optsDebias.HessianMultiplyFcn = @(hinfo, v, varargin) ...
+            hessmult_S_free(hinfo, v, free_idx2, szS2, Y2, H_est, B2, params.k2, Finv, lambdaDebias);
+        objS = @(x) objfun_S_free(x, free_idx2, szS2, Y2, H_est, B2, params.k2, Finv, lambdaDebias);
+        x = fmincon(objS, x0, [], [], [], [], problemS.lb(free2), problemS.ub(free2), [], optsDebias);
+        S2(free2) = x;
+    end
     
     %X2 = convn(S2, params.k2, 'same'); %update X2
     
@@ -687,6 +720,32 @@ function HvS = hessmult_S_wrapper(S, Z, H, B, k, F, lambda, v)
 % if ~isreal(HvS)
 %     keyboard
 % end
+end
+
+function [f, g, Hinfo] = objfun_S_free(x, free_idx, szS, Z, H, B, k, F, lambda)
+%OBJFUN_S_FREE Objective on free S entries only (scatter/gather into full S).
+S = zeros(szS);
+S(free_idx) = x;
+[f, gS] = objfun_S(S, Z, H, B, k, F, lambda);
+g = gS(free_idx);
+Hinfo = S;
+end
+
+function Hv = hessmult_S_free(Hinfo, v, free_idx, szS, Z, H, B, k, F, lambda)
+%HESSMULT_S_FREE Hessian-vector product on free S entries only.
+nv = size(v, 2);
+Vfull = zeros(prod(szS), nv);
+for j = 1:nv
+    tmp = zeros(szS);
+    tmp(free_idx) = v(:, j);
+    Vfull(:, j) = tmp(:);
+end
+HvFull = hessmult_S_wrapper(Hinfo, Z, H, B, k, F, lambda, Vfull);
+Hv = zeros(numel(free_idx), nv);
+for j = 1:nv
+    tmp = reshape(HvFull(:, j), szS);
+    Hv(:, j) = tmp(free_idx);
+end
 end
 
 function Xfloor = computeFloor(X, denoiseWindow, baseline)
