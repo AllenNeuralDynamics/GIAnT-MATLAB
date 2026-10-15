@@ -5,29 +5,42 @@ if isempty(curPool) || ~strcmpi(class(curPool), 'parallel.ThreadPool') %  ~strcm
     parpool('Threads'); %use all available Threads
 end
 numDatasets = numel(fls);
-E = cell(numDatasets,1); 
+E = cell(numDatasets,1);
+minFrames = 100; %extractTrial initializes from the first 100 samples; shorter trials cannot be source-extracted
+pending = []; %trial whose extraction is still running
 for i = 1:numel(validTrials)
     nLoad = validTrials(i);
     CD = loadTrial(dr, fns{nLoad},fls(nLoad),els(nLoad),selPix,discardFrames{nLoad}, alignData{nLoad}, meanAligned(:,:,:,nLoad), motOutput(:,nLoad), roiData, params);
     E{nLoad}.ROIs = CD.ROIs; E{nLoad}.global = CD.global;
     E{nLoad}.discardFrames = CD.discardFrames;
     E{nLoad}.frameLines = CD.frameLines;
-    if i>1 %we process the previous trial after loading the next, to keep CPU usage up during loading
-        [E{validTrials(i-1)}, B] = processResult(resultsFuture, E{validTrials(i-1)},params);
-        if isempty(E{nLoad})
-            disp(['Error processing trial: ' int2str(nLoad) '\n Continuing...'])
+    if ~isempty(pending) %we process the previous trial after loading the next, to keep CPU usage up during loading
+        [E{pending}, B] = processResult(resultsFuture, E{pending},params);
+        if isempty(E{pending})
+            disp(['Error processing trial: ' int2str(pending) '\n Continuing...'])
         end
+        pending = [];
+    end
+    nFrames = size(CD.Yobs,3);
+    if nFrames < minFrames
+        warning('SILo:shortTrial', 'Trial %d (%s) has only %d frames (minimum %d); skipping source extraction for this trial.', ...
+            nLoad, fns{nLoad}, nFrames, minFrames);
+        clear CD;
+        continue
     end
     disp(['Processing trial ' int2str(validTrials(i)) ' from ' fns{nLoad}])
     %Y = squeeze(CD.Yobs(:,1,:));
     Y = permute(CD.Yobs, [1 3 2]);
     resultsFuture = extractTrial(Y,CD.Finv, sources, any(selPix,3), params, alignData{nLoad});
+    pending = nLoad;
     clear CD;
 end
 
-[E{nLoad}, B] = processResult(resultsFuture,E{nLoad},params);
-if isempty(E{nLoad})
-    disp(['Error processing trial: ' int2str(nLoad) '\n Continuing...'])
+if ~isempty(pending)
+    [E{pending}, B] = processResult(resultsFuture,E{pending},params);
+    if isempty(E{pending})
+        disp(['Error processing trial: ' int2str(pending) '\n Continuing...'])
+    end
 end
 
 end
@@ -99,8 +112,13 @@ if params.isSLAP2
         selPx2D = any(selPix,3);
 
         %upsample motion
-        motionC = interp1(alignData.DSframes, alignData.motionDSc, frameLines, 'pchip', 'extrap') + motOutput(2);
-        motionR = interp1(alignData.DSframes, alignData.motionDSr, frameLines, 'pchip', 'extrap') + motOutput(1);
+        if numel(alignData.DSframes) > 1
+            motionC = interp1(alignData.DSframes, alignData.motionDSc, frameLines, 'pchip', 'extrap') + motOutput(2);
+            motionR = interp1(alignData.DSframes, alignData.motionDSr, frameLines, 'pchip', 'extrap') + motOutput(1);
+        else %only one downsampled frame; assume constant motion
+            motionC = repmat(alignData.motionDSc(1), size(frameLines)) + motOutput(2);
+            motionR = repmat(alignData.motionDSr(1), size(frameLines)) + motOutput(1);
+        end
         CD.motionC = motionC;
         CD.motionR = motionR;
 
@@ -267,7 +285,11 @@ if params.isSLAP2
         end
 end
 
-discard = interp1(1:numel(discardFrames), double(discardFrames(:)), linspace(1, numel(discardFrames), size(IMsel,3)))>0; %upsample the discard frames
+if numel(discardFrames) > 1
+    discard = interp1(1:numel(discardFrames), double(discardFrames(:)), linspace(1, numel(discardFrames), size(IMsel,3)))>0; %upsample the discard frames
+else
+    discard = repmat(any(discardFrames(:)), 1, size(IMsel,3));
+end
 IMsel(:,:,discard) = nan;     %throw away movement frames as above
 IMsel(IMsel<-2*std(IMsel,0,3, 'omitmissing')) = nan; %throw away any aberrantly negative data
 CD.global.F(:,discard) = nan;
