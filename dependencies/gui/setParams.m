@@ -22,7 +22,8 @@ switch fnName
         params.peakth = 8;              tooltips.peakth = 'peak identification threshold (actIM z-score)';
         params.minPeakDistance = 1;     tooltips.minPeakDistance = 'minimum Chebyshev distance between peaks (pixels); 1 = adjacent peaks allowed';
         params.nWorkers = 12;           tooltips.nWorkers = 'number of parallel workers';
-        params.drawUserRois = true;     tooltips.drawUserRois = 'pop up a GUI to annotate user ROIs?';  
+        params.drawUserRois = true;     tooltips.drawUserRois = 'use user ROIs (annotations.h5, else post-acquisition annotations, else draw them)?';
+        params.allowAnnotationGUI = true; tooltips.allowAnnotationGUI = 'open the ROI GUI for paths without usable annotations? Never opens in -batch/-nodisplay sessions; such paths are processed without user ROIs';
         params.motionThresh = 2;         tooltips.motionThresh = 'decrease this to be more stringent on motion correction when censoring frames';
         params.analyzeHz = 200;          tooltips.analyzeHz = 'frame rate used for analysis (SLAP2 only)';
         params.nanThresh = 0.33;         tooltips.nanThresh = 'Max fraction of samples that can be NaN for including a pixel in analysis';
@@ -74,6 +75,12 @@ if nargin>1 %if the user specified parameters, add in the user parameters, use d
 end
 
 %get parameters from user
+if ~isInteractiveSession() %nobody can answer the GUI; it would wait forever
+    warning('setParams:NonInteractive', ...
+        'No interactive display; using default %s parameters instead of the parameter GUI.', fnName);
+    params = coerceLegacyParamNames(params);
+    return
+end
 paramsIn = optionsGUI(params, tooltips, fnName);
 params = coerceLegacyParamNames(paramsIn);
 

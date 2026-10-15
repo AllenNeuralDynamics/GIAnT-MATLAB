@@ -11,6 +11,9 @@ end
 % Fixed values; user/GUI/JSON cannot override these in SILo
 params.minBaseline = 0.01;
 if ~nargin
+    if ~isInteractiveSession()
+        error('SILo:NonInteractive', 'No interactive display: pass the trial_table.h5 path (or its folder) to SILo.');
+    end
     [trialTablefn, dr] =  uigetfile('*.h5', 'Select a trial_table file', '*trial_table*.h5' );
 else
     if exist(dr_or_pathToTrialTable, 'dir')
@@ -47,7 +50,8 @@ end
 %call up a GUI for the user to define Soma ROI and regions to exclude
 if params.drawUserRois
     %uses existing annotations.h5, else post-acquisition annotations, else draws
-    ROIs = loadOrCreateAnnotations(trialTable, keepTrials, mocodr);
+    %(drawing only when allowed and someone can respond; otherwise no user ROIs)
+    ROIs = loadOrCreateAnnotations(trialTable, keepTrials, mocodr, params.allowAnnotationGUI);
 else
     ROIs = [];
 end
