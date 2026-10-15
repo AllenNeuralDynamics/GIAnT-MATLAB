@@ -66,7 +66,7 @@ SILo;                                     % or SILo(pathToTrialTable)  % isSLAP2
    - **`MultiRoiRegistration`** — multi-ROI raster SLAP2
    - **`BandRegistration`** — band-scan SLAP2  
    Requires a SLAP2 reader and Fast_Tiff_Write on the path (NoRMCorre is not used on these paths).
-3. **Optional: `annotateROIs`**
+3. **Optional: `annotateROIs`** — uses post-acquisition annotations from `postAcquisitionAnnotation` if present (see [Post-acquisition annotations](#post-acquisition-annotations-slap2))
 4. **`SILo`** — in the parameter GUI, set **`isSLAP2`** to `true`.
 
 ```matlab
@@ -175,6 +175,9 @@ In our pipeline, users can manually annotate pixels to exclude from analysis or 
     ├ 🔤 dr
     ├ 🔤 fn
     ├ 🔢 n_rois
+    ├ 🖼️ image (postacq_annotations.h5 only; H x W x C image the ROIs were drawn on)
+    ├ 📈 alignment_shift_rc (imported post-acquisition annotations only; [row, col] shift applied)
+    ├ 📈 alignment_ncc (imported post-acquisition annotations only; correlation of that alignment)
     └ 📁 roi_###
        ├ 🔤 type
        ├ 🔤 label
@@ -185,6 +188,12 @@ In our pipeline, users can manually annotate pixels to exclude from analysis or 
        ├ 📈 rotation_angle (ellipse)
        └ 📈 radius (circle)
 ```
+
+#### Post-acquisition annotations (SLAP2)
+
+Somata are easiest to identify at the rig, right after acquisition. **`postAcquisitionAnnotation(dr)`** opens the ROI GUI on the mean image of one raw acquisition tiff per DMD (the newest one under `dr` is preselected) and saves the ROIs, with the image they were drawn on, to `postacq_annotations.h5` next to those tiffs (same schema as above). The SLAP2 launcher in [openscope-experimental-launcher](https://github.com/AllenNeuralDynamics/openscope-experimental-launcher) can run this automatically when an acquisition ends.
+
+Later, if `annotations.h5` does not exist yet, `annotateROIs` and `SILo` look for `postacq_annotations.h5` under `trialTable.datadr`. For each imaging path, they register its image to the motion-corrected mean image of the longest valid trial, the same image ROIs are drawn on (translation by masked normalized cross-correlation) and shift the ROIs accordingly. The result is written to `annotations.h5`. A path is drawn interactively, as before, if it has no post-acquisition annotations or if registration fails (correlation below 0.6). To redo the import, delete `annotations.h5`.
 
 ### Experiment Summary
 

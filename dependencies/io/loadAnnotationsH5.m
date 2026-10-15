@@ -38,11 +38,15 @@ end
 [~, order] = sort(pathNums);
 pathNames = pathNames(order);
 
-ROIs = repmat(struct('dr', '', 'fn', '', 'roiData', {{}}), 1, numel(pathNames));
+ROIs = repmat(struct('dr', '', 'fn', '', 'roiData', {{}}, 'IM', [], ...
+    'alignmentShiftRC', [], 'alignmentNCC', []), 1, numel(pathNames));
 for DMDix = 1:numel(pathNames)
     pathRoot = ['/' pathNames{DMDix}];
     ROIs(DMDix).dr = readStringOrDefault(filename, [pathRoot '/dr'], '');
     ROIs(DMDix).fn = readStringOrDefault(filename, [pathRoot '/fn'], '');
+    ROIs(DMDix).IM = readNumericOrDefault(filename, [pathRoot '/image'], []);
+    ROIs(DMDix).alignmentShiftRC = readNumericOrDefault(filename, [pathRoot '/alignment_shift_rc'], []);
+    ROIs(DMDix).alignmentNCC = readNumericOrDefault(filename, [pathRoot '/alignment_ncc'], []);
 
     nRois = double(readNumericOrDefault(filename, [pathRoot '/n_rois'], uint32(0)));
     roiData = cell(1, nRois);

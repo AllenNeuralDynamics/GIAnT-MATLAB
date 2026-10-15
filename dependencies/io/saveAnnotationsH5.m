@@ -6,6 +6,9 @@ function saveAnnotationsH5(filename, ROIs)
 %   /coords_zero_indexed (uint8; 1 = position/center are 0-indexed [y_loc, x_loc])
 %   /Path1/dr
 %   /Path1/fn
+%   /Path1/image (optional; H x W x C image the ROIs were drawn on)
+%   /Path1/alignment_shift_rc (optional; [row col] shift applied to post-acquisition ROIs)
+%   /Path1/alignment_ncc (optional; correlation of that alignment)
 %   /Path1/roi_001/type
 %   /Path1/roi_001/label
 %   /Path1/roi_001/mask
@@ -48,6 +51,16 @@ for DMDix = 1:numel(ROIs)
         roiData = {};
     end
     writeDataset(filename, [pathRoot '/n_rois'], uint32(numel(roiData)));
+
+    %optional: image the ROIs were drawn on (post-acquisition annotations)
+    if isfield(ROIs(DMDix), 'IM') && ~isempty(ROIs(DMDix).IM)
+        writeDataset(filename, [pathRoot '/image'], single(ROIs(DMDix).IM));
+    end
+    %optional: translation applied to post-acquisition annotations
+    if isfield(ROIs(DMDix), 'alignmentShiftRC') && ~isempty(ROIs(DMDix).alignmentShiftRC)
+        writeDataset(filename, [pathRoot '/alignment_shift_rc'], double(ROIs(DMDix).alignmentShiftRC));
+        writeDataset(filename, [pathRoot '/alignment_ncc'], double(ROIs(DMDix).alignmentNCC));
+    end
 
     for rix = 1:numel(roiData)
         roiPath = sprintf('%s/roi_%03d', pathRoot, rix);
