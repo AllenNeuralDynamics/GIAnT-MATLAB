@@ -4,6 +4,7 @@ function saveAnnotationsH5(filename, ROIs)
 % File schema:
 %   /row_major (uint8; 0 = column-major / MATLAB size() layout)
 %   /coords_zero_indexed (uint8; 1 = position/center are 0-indexed [y_loc, x_loc])
+%   /schema_version (uint32; see annotationsSchemaVersion)
 %   /Path1/dr
 %   /Path1/fn
 %   /Path1/image (optional; H x W x C image the ROIs were drawn on)
@@ -29,6 +30,7 @@ end
 h5create(filename, '/row_major', [1 1], 'Datatype', 'uint8');
 h5write(filename, '/row_major', uint8(0));
 writeDataset(filename, '/coords_zero_indexed', uint8(1));
+writeDataset(filename, '/schema_version', uint32(annotationsSchemaVersion()));
 
 for DMDix = 1:numel(ROIs)
     pathRoot = sprintf('/Path%d', DMDix);

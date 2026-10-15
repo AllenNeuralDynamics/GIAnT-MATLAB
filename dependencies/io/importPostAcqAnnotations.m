@@ -20,7 +20,16 @@ if isempty(fnPostAcq)
     return
 end
 disp(['Importing post-acquisition annotations: ' fnPostAcq])
-postAcq = loadAnnotationsH5(fnPostAcq);
+[postAcq, schemaVersion] = loadAnnotationsH5(fnPostAcq);
+if schemaVersion ~= annotationsSchemaVersion()
+    %ROI geometry and the image orientation they were drawn in must match
+    %what this version expects, or ROIs would be placed incorrectly
+    warning('importPostAcqAnnotations:SchemaMismatch', ...
+        ['%s has annotation schema version %d but this GIAnT expects %d; ' ...
+         'post-acquisition annotations not used. Align the GIAnT versions used ' ...
+         'at the rig and for analysis.'], fnPostAcq, schemaVersion, annotationsSchemaVersion());
+    return
+end
 
 for DMDix = 1:nDMDs
     if DMDix > numel(postAcq) || isempty(postAcq(DMDix).IM)
