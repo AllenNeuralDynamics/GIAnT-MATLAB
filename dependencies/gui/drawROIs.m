@@ -51,7 +51,8 @@ classdef drawROIs < handle
             obj.fn = fn;
 
             %gui creation
-            obj.hF = uifigure('name', ['ROI TRACING - ' obj.fn], 'KeyPressFcn', @obj.kpf);
+            obj.hF = uifigure('name', ['ROI TRACING - ' obj.fn], 'KeyPressFcn', @obj.kpf, ...
+                'CloseRequestFcn', @obj.close); %closing the window keeps ROIs, same as Done
             obj.hGrid = uigridlayout(obj.hF);
             obj.hGrid.RowHeight = {50, '1x'};
             obj.hGrid.ColumnWidth = {'1x'};
@@ -117,7 +118,7 @@ classdef drawROIs < handle
                 end
             end
             obj.roiData = roiData;
-            close(obj.hF);
+            delete(obj.hF); %not close(), which would re-enter CloseRequestFcn
         end
 
 
