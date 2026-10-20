@@ -72,17 +72,8 @@ classdef drawROIs < handle
 
             obj.hAx = uiaxes(obj.hGrid);
 
-            switch obj.numChannels
-                case 1
-                    IMdisp = IM./prctile(IM(:), 99.9);
-                case 2
-                    IM1 = IM(:,:,1)./prctile(IM(:,:,1), 99.9, 'all');
-                    IM2 = IM(:,:,2)./prctile(IM(:,:,2), 99.9, 'all');
-                    IMdisp = cat(3, IM1, IM2, IM2);
-                otherwise 
-                    error('Unexpected number of channels (dim3) for drawROIs GUI');
-            end
-            
+            IMdisp = annotationDisplayImage(IM);
+
             obj.hIm = imshow(IMdisp,'parent', obj.hAx);
             set(obj.hIm, 'HitTest', 'off', 'pickableparts', 'none', 'clipping', 'on')
             set(obj.hAx, 'hittest', 'off', 'PickableParts', 'all')

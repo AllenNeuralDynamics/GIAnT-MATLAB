@@ -26,7 +26,9 @@ nframes = floor(size(data,3) ./ nchan);
 data = reshape(data(:,:,1:nframes*nchan), size(data,1), size(data,2), nchan, nframes);
 unimaged = all(data == 0, [3 4]); %SLAP2 writes zeros for pixels outside the imaged ROIs
 keep = unique(round(linspace(1, nframes, min(nframes, maxFrames))));
-IM = squeeze(trimmean(single(data(:,:,:,keep)), 40, 4));
+%plain mean, not a trimmed mean: SLAP2 samples are mostly 0 photons, so the
+%signal is in the rare nonzero samples that trimming would discard
+IM = squeeze(mean(single(data(:,:,:,keep)), 4));
 IM(repmat(unimaged, 1, 1, nchan)) = nan;
 IM = permute(IM, [2 1 3]); %tiff reader returns W x H; registered outputs are H x W
 end
