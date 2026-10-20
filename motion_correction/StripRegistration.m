@@ -291,7 +291,7 @@ end
 Bsum = zeros([size(viewR') numChannels]);
 Bcount = zeros([size(viewR') numChannels]);
 
-tiffSave = single(zeros([size(viewR, [2 1]) nDSframes*numChannels]));
+tiffSave = zeros([size(viewR, [2 1]) nDSframes*numChannels], 'single');
 
 for DSframe = 1:nDSframes
     readFrames = (DSframe-1)*(dsFac) + (1:(dsFac));
@@ -345,7 +345,7 @@ fnRaw = [fnstem '_REGISTERED_RAW.tif'];
 if ~params.saveTif
     fnRaw = strrep(fnRaw, '.tif', '.h5');
 end
-tiffSave = single(zeros([size(viewR, [2 1]) - [sum(nanRows) sum(nanCols)] length(motionC)*numChannels]));
+tiffSave = zeros([size(viewR, [2 1]) - [sum(nanRows) sum(nanCols)] length(motionC)*numChannels], 'single');
 for frame = 1:length(motionC)
     for ch = 1:numChannels
         B = interp2(1:sz(2), 1:sz(1), Ad(:,:,ch,frame),viewC+motionC(frame), viewR+motionR(frame), 'linear', nan)';
