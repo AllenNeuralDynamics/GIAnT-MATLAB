@@ -212,6 +212,7 @@ if params.isSLAP2
         scored = (scored-prctile(scored(:),25,'all'))./(prctile(scored(:),99,'all')-prctile(scored(:),25,'all'));
         labeled = scored>0.1;
         meanPx = reshape(meanIM, numel(labeled), numChannels);
+        meanPx = meanPx(:, orderedChannels); %meanIM is in raw channel order; match the reordered frames below
         mLabeled = meanPx(labeled,:);
 
         blocksize = 600; %number of frames to load at a time;
@@ -227,7 +228,7 @@ if params.isSLAP2
             nFramesInBlock = length(fIxs);
             
             Y = IM(:,:,:,fIxs); %reduce communication overhead to parallel workers
-            nanMask = isnan(Y);
+            nanMask = isnan(Y(:,:,orderedChannels,:)); %Y2 below is in analysis channel order
             Y2 = nan(length(viewR),length(viewC),numChannels, nFramesInBlock);
             Finv = nan(length(viewR),length(viewC),nFramesInBlock);
             parfor frIx = 1:nFramesInBlock
