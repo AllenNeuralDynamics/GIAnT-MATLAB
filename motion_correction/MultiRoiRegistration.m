@@ -97,6 +97,9 @@ aData = params;
 
 disp(['Aligning: ' fnW ' of ' [trialTable.datadr filesep fn]])
 fnwrite = [fnW '_REGISTERED_DOWNSAMPLED-' int2str(aData.alignHz) 'Hz.tif'];
+if ~params.saveTif
+    fnwrite = strrep(fnwrite, '.tif', '.h5');
+end
 fnAdata = [fnW '_ALIGNMENTDATA.h5'];
 registrationFailed = false;
 
@@ -269,7 +272,9 @@ aErrorDS = nan(1,nDSframes); %alignment error output by dftregistration
 
 %output TIF
 pixelscale = 4e4; %PIXEL SIZE IN DOTS PER CM; 250nm
-fTIF = Fast_BigTiff_Write([mocosavedr filesep fnwrite],pixelscale,0);
+if params.saveTif
+    fTIF = Fast_BigTiff_Write([mocosavedr filesep fnwrite],pixelscale,0);
+end
 
 V1 = nan(size(viewC,1),size(viewC,2),nDSframes,'single'); %variance factor; multiply the image value by this to get variance
 %T = T0(aData.maxshift + (1:sz(1)), aData.maxshift+(1:sz(2)));
@@ -277,6 +282,14 @@ disp('Registering:');
 % Per-channel mean over time (aligned frames), numChannels x H x W.
 % H,W match interpFrame output / saved TIFF pages: trimmed crop plus maxshift padding.
 szOut = [sz(1) + 2*aData.maxshift, sz(2) + 2*aData.maxshift];
+if ~params.saveTif
+    h5fn = [mocosavedr filesep fnwrite];
+    if exist(h5fn, 'file')
+        delete(h5fn);
+    end
+    h5sz = [szOut nDSframes*numChannels];
+    h5create(h5fn, '/data', h5sz, 'Datatype', 'single', 'Deflate', 4, 'ChunkSize', [h5sz(1) h5sz(2) 1]);
+end
 sumMeanIM = zeros(numChannels, szOut(1), szOut(2), 'single');
 nMeanIM = zeros(numChannels, szOut(1), szOut(2), 'single');
 try
@@ -314,10 +327,18 @@ try
         %compute aligned image and variance factor
         [A1,V1(:,:,DSframeIx)] = interpFrame(M1, viewC(1,:)+motionDSc(DSframeIx), viewR(:,1)+motionDSr(DSframeIx), freshness);
 
-        fTIF.WriteIMG(single(A1));
+        if params.saveTif
+            fTIF.WriteIMG(single(A1));
+        else
+            h5write(h5fn, '/data', single(A1), [1 1 (DSframeIx-1)*numChannels+1], [szOut 1]);
+        end
         if numChannels==2
             A2 = interpFrame(M2, viewC(1,:)+motionDSc(DSframeIx), viewR(:,1)+motionDSr(DSframeIx), freshness);%interp2(1:sz(2), 1:sz(1), M2,viewC+motionDSc(DSframeIx), viewR+motionDSr(DSframeIx), 'linear', nan);
-            fTIF.WriteIMG(single(A2));
+            if params.saveTif
+                fTIF.WriteIMG(single(A2));
+            else
+                h5write(h5fn, '/data', single(A2), [1 1 (DSframeIx-1)*numChannels+2], [szOut 1]);
+            end
             A =A1+A2;
         else
             A = A1;
@@ -362,7 +383,9 @@ catch ME
     return
 end
 
-fTIF.close;
+if params.saveTif
+    fTIF.close;
+end
 
 meanIM = sumMeanIM ./ max(nMeanIM, single(1));
 meanIM(nMeanIM < single(1)) = nan;

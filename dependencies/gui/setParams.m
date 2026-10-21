@@ -34,6 +34,7 @@ switch fnName
         params.alpha = 0.005; tooltips.alpha = 'exponential decay of template per frame';%exponential time constant for template
         params.nWorkers = 16; tooltips.nWorkers = 'number of parallel workers';
         params.overwriteExisting = false; tooltips.overwriteExisting = 'Realign and overwrite any existing files?';
+        params.saveTif = true; tooltips.saveTif = 'whether to save registered movie as .tif or .h5';
         params.refStackTemplate = false; tooltips.refStackTemplate = 'Use ref stack as template';
         params.isReVolt = false; tooltips.isReVolt = 'select true for recordings with simultaneous red 1P imaging';
         params.includeIntegrationROIs = false; tooltips.includeIntegrationROIs = 'Use integration ROIs for alignment and TIFF generation?';
