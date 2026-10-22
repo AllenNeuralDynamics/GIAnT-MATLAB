@@ -31,21 +31,7 @@ if ~(ncc >= minNCC)
 end
 ok = true;
 
-targetSz = size(IMtarget, [1 2]);
-roiData = getFieldOrEmpty(roiEntry, 'roiData');
-for rix = 1:numel(roiData)
-    S = roiData{rix};
-    for fnm = {'Center', 'Position', 'Vertices'}
-        if isfield(S, fnm{1}) && ~isempty(S.(fnm{1}))
-            S.(fnm{1}) = S.(fnm{1}) + [shiftRC(2) shiftRC(1)]; %images.roi coordinates are [x y]
-        end
-    end
-    if isfield(S, 'mask') && ~isempty(S.mask)
-        S.mask = shiftMask(S.mask, shiftRC, targetSz);
-    end
-    roiData{rix} = S;
-end
-roiEntry.roiData = roiData;
+roiEntry.roiData = shiftRoiData(getFieldOrEmpty(roiEntry, 'roiData'), shiftRC, size(IMtarget, [1 2]));
 end
 
 
@@ -81,16 +67,6 @@ IM = double(IMraw);
 if ndims(IM) > 2
     IM = mean(IM, 3:ndims(IM), 'omitnan');
 end
-end
-
-
-function maskOut = shiftMask(maskIn, shiftRC, targetSz)
-maskOut = false(targetSz);
-[rr, cc] = find(maskIn);
-rr = rr + shiftRC(1);
-cc = cc + shiftRC(2);
-valid = rr >= 1 & rr <= targetSz(1) & cc >= 1 & cc <= targetSz(2);
-maskOut(sub2ind(targetSz, rr(valid), cc(valid))) = true;
 end
 
 

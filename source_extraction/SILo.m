@@ -212,6 +212,12 @@ for DMDix = nDMDs:-1:1
     exptSummary.actIM{DMDix} = actIM;
     sz = size(actIM);
 
+    %user ROIs are in the frame of the trial they were annotated on; move them
+    %into the consensus frame that actIM and extraction use
+    if ~isempty(ROIs) && DMDix <= numel(ROIs)
+        ROIs(DMDix) = roisToConsensusFrame(ROIs(DMDix), trialTable.motion_correction.fn_reg_ds(DMDix,:), motOutput, sz(1:2));
+    end
+
     %Mask out somata from activity image
     somaMask = false(size(actIM));
     if ~isempty(ROIs)

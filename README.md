@@ -196,7 +196,9 @@ Somata are easiest to identify at the rig, right after acquisition. **`postAcqui
 
 Later, if `annotations.h5` does not exist yet, `annotateROIs` and `SILo` look for `postacq_annotations.h5` under `trialTable.datadr`. For each imaging path, they register its image to the motion-corrected mean image of the longest valid trial, the same image ROIs are drawn on (translation by masked normalized cross-correlation) and shift the ROIs accordingly. The result is written to `annotations.h5`. A path is drawn interactively, as before, if it has no post-acquisition annotations or if registration fails (correlation below 0.6).
 
-**Unattended runs.** GIAnT never opens a GUI when MATLAB runs with `-batch` or `-nodisplay` (e.g. on Code Ocean), or in `SILo` when its `allowAnnotationGUI` parameter is `false`. In that case a path without usable annotations is processed without user ROIs, with a warning, and `annotations.h5` is not written, so a later interactive run can still annotate it. Pipeline functions called without a params struct use their defaults instead of the parameter GUI.
+**Unattended runs.** GIAnT never opens a GUI when MATLAB runs with `-batch` or `-nodisplay` (e.g. on Code Ocean), or in `SILo` when its `allowAnnotationGUI` parameter is `false`. In that case a path without usable annotations is processed without user ROIs, with a warning, and saved to `annotations.h5` as not annotated (empty `fn`), so a later interactive run annotates just that path. Pipeline functions called without a params struct use their defaults instead of the parameter GUI.
+
+ROIs in `annotations.h5` are in the frame of the registered trial named by `fn`; `SILo` moves them into its cross-trial consensus frame (the trial's alignment offset) before soma exclusion and ROI extraction, so `userROIs` in the experiment summary are in that frame.
 
 To redo the import, delete `annotations.h5`. Post-acquisition files are imported only if their `schema_version` matches the reading GIAnT's, so use GIAnT versions with the same schema at the rig and for analysis (the SLAP2 launcher pins the rig's GIAnT commit).
 
