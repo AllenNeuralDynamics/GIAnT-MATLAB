@@ -11,6 +11,9 @@ end
 % Fixed values; user/GUI/JSON cannot override these in SILo
 params.minBaseline = 0.01;
 if ~nargin
+    if ~isInteractiveSession()
+        error('SILo:NonInteractive', 'No interactive display: pass the trial_table.h5 path (or its folder) to SILo.');
+    end
     [trialTablefn, dr] =  uigetfile('*.h5', 'Select a trial_table file', '*trial_table*.h5' );
 else
     if exist(dr_or_pathToTrialTable, 'dir')
@@ -46,46 +49,9 @@ end
 
 %call up a GUI for the user to define Soma ROI and regions to exclude
 if params.drawUserRois
-    annotationsDr = fullfile(trialTable.savedr, 'annotations');
-    if ~exist(annotationsDr, 'dir')
-        mkdir(annotationsDr);
-    end
-    fnAnnH5 = fullfile(annotationsDr, 'annotations.h5');
-    if exist(fnAnnH5, 'file')
-        ROIs = loadAnnotationsH5(fnAnnH5);
-    else
-        drawnDMDs = false(1, nDMDs);
-        for DMDix = 1:nDMDs
-            firstValidTrial = find(keepTrials(DMDix,:),1,"first");
-            if isempty(firstValidTrial)
-                warning('SILo:NoValidTrials', ...
-                    'Skipping ROI drawing for imaging path %d: no trials passed file verification.', DMDix);
-                ROIs(DMDix).dr = mocodr;
-                ROIs(DMDix).fn = '';
-                ROIs(DMDix).roiData = [];
-                continue
-            end
-            %load image data (prefer meanIM from alignment H5)
-            [~, fn, ext] = fileparts(trialTable.motion_correction.fn_reg_ds{DMDix,firstValidTrial});
-            adataFn = trialTable.motion_correction.fn_adata{DMDix, firstValidTrial};
-            aDataAnnot = loadStructFromH5(fullfile(mocodr, adataFn));
-            if isfield(aDataAnnot, 'meanIM') && ~isempty(aDataAnnot.meanIM)
-                IM = squeeze(mean(aDataAnnot.meanIM, 1, 'omitnan')); % numChannels x H x W -> H x W
-            else
-                [IMtif, ~] = ScanImageTiffWrapper(fullfile(mocodr, [fn ext]));
-                IM = squeeze(mean(IMtif, [3 4], 'omitnan'));
-            end
-            hROIs(DMDix) = drawROIs(sqrt(max(0,IM)), savedr, fn);
-            ROIs(DMDix).dr = mocodr;
-            ROIs(DMDix).fn = fn;
-            drawnDMDs(DMDix) = true;
-        end
-        for DMDix = find(drawnDMDs)
-            waitfor(hROIs(DMDix).hF);
-            ROIs(DMDix).roiData = hROIs(DMDix).roiData;
-        end
-        saveAnnotationsH5(fnAnnH5, ROIs); clear hROIs;
-    end
+    %uses existing annotations.h5, else post-acquisition annotations, else draws
+    %(drawing only when allowed and someone can respond; otherwise no user ROIs)
+    ROIs = loadOrCreateAnnotations(trialTable, keepTrials, mocodr, params.allowAnnotationGUI);
 else
     ROIs = [];
 end

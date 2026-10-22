@@ -1,5 +1,8 @@
-function ROIs = loadAnnotationsH5(filename)
+function [ROIs, schemaVersion] = loadAnnotationsH5(filename)
 %LOADANNOTATIONSH5 Load manual ROI annotations from an HDF5 file.
+%
+% schemaVersion is the file's /schema_version (1 for unversioned files);
+% see annotationsSchemaVersion.
 
 if nargin < 1 || isempty(filename)
     error('loadAnnotationsH5:MissingFilename', 'A source filename must be provided.');
@@ -8,6 +11,13 @@ if ~exist(filename, 'file')
     error('loadAnnotationsH5:FileNotFound', 'File not found: %s', filename);
 end
 
+schemaVersion = double(readNumericOrDefault(filename, '/schema_version', uint32(1)));
+if schemaVersion > annotationsSchemaVersion()
+    warning('loadAnnotationsH5:NewerSchema', ...
+        ['%s uses annotation schema version %d, newer than this GIAnT supports (%d); ' ...
+         'update GIAnT-MATLAB. Fields it does not know about are ignored.'], ...
+        filename, schemaVersion, annotationsSchemaVersion());
+end
 coordsZeroIndexed = logical(readNumericOrDefault(filename, '/coords_zero_indexed', uint8(0)));
 
 info = h5info(filename);
@@ -38,11 +48,15 @@ end
 [~, order] = sort(pathNums);
 pathNames = pathNames(order);
 
-ROIs = repmat(struct('dr', '', 'fn', '', 'roiData', {{}}), 1, numel(pathNames));
+ROIs = repmat(struct('dr', '', 'fn', '', 'roiData', {{}}, 'IM', [], ...
+    'alignmentShiftRC', [], 'alignmentNCC', []), 1, numel(pathNames));
 for DMDix = 1:numel(pathNames)
     pathRoot = ['/' pathNames{DMDix}];
     ROIs(DMDix).dr = readStringOrDefault(filename, [pathRoot '/dr'], '');
     ROIs(DMDix).fn = readStringOrDefault(filename, [pathRoot '/fn'], '');
+    ROIs(DMDix).IM = readNumericOrDefault(filename, [pathRoot '/image'], []);
+    ROIs(DMDix).alignmentShiftRC = readNumericOrDefault(filename, [pathRoot '/alignment_shift_rc'], []);
+    ROIs(DMDix).alignmentNCC = readNumericOrDefault(filename, [pathRoot '/alignment_ncc'], []);
 
     nRois = double(readNumericOrDefault(filename, [pathRoot '/n_rois'], uint32(0)));
     roiData = cell(1, nRois);
