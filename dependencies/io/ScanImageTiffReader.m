@@ -149,6 +149,92 @@ classdef ScanImageTiffReader < handle
             end
         end
 
+        % ----- dataPlanes --------------------------------------------
+        function stack = dataPlanes(obj, planeIdx)
+            %DATAPLANES Read only the given planes (IFDs), in the order given.
+            %   stack = reader.dataPlanes(planeIdx) returns the same layout as
+            %   data() with nplanes = numel(planeIdx), reading each plane's
+            %   strips directly, so memory scales with the planes requested
+            %   rather than the file.
+            obj.ensureOpen_();
+            planeIdx = planeIdx(:)';
+            assert(all(planeIdx >= 1 & planeIdx <= obj.nplanes_ & planeIdx == round(planeIdx)), ...
+                'ScanImageTiffReader:InvalidPlane', 'Plane indices must be integers in 1..%d.', obj.nplanes_);
+
+            precision      = ['*' obj.matlabType_];
+            samplesPerPlane = obj.nchan_ * obj.w_ * obj.h_;
+            stack = zeros(samplesPerPlane, numel(planeIdx), obj.matlabType_);
+
+            % Byte range of each requested plane; planes stored as one
+            % contiguous block are read together with nearby planes in long
+            % sequential reads (much faster than one read per plane,
+            % especially on network drives), skipping only large gaps.
+            maxGapBytes = 8e6;   % read through gaps up to this size
+            maxRunBytes = 64e6;  % bound on a single read (and its buffer)
+            nReq = numel(planeIdx);
+            planeStart = zeros(1, nReq);
+            planeEnd   = zeros(1, nReq);
+            isBlock    = false(1, nReq);
+            for p = 1:nReq
+                ss = obj.ifdStrips_{planeIdx(p)};
+                offsets = [ss.offset];
+                nbytes  = [ss.nbytes];
+                isBlock(p) = all(offsets(2:end) == offsets(1:end-1) + nbytes(1:end-1)) ...
+                    && sum(nbytes) == samplesPerPlane * obj.bytesPerSample_;
+                planeStart(p) = offsets(1);
+                planeEnd(p)   = offsets(1) + sum(nbytes);
+            end
+
+            [~, order] = sort(planeStart);
+            k = 1;
+            while k <= nReq
+                p = order(k);
+                if ~isBlock(p) % strips scattered within the plane: read them one by one
+                    ss = obj.ifdStrips_{planeIdx(p)};
+                    pos = 1;
+                    for j = 1:numel(ss)
+                        nSamp = ss(j).nbytes / obj.bytesPerSample_;
+                        fseek(obj.fid_, ss(j).offset, 'bof');
+                        stack(pos:pos + nSamp - 1, p) = fread(obj.fid_, nSamp, precision, 0, obj.machfmt_);
+                        pos = pos + nSamp;
+                    end
+                    k = k + 1;
+                    continue
+                end
+                % extend the run over following planes that are close by
+                runStart = planeStart(p);
+                runEnd   = planeEnd(p);
+                last = k;
+                while last < nReq
+                    q = order(last + 1);
+                    if ~isBlock(q) || planeStart(q) - runEnd > maxGapBytes || planeEnd(q) - runStart > maxRunBytes
+                        break
+                    end
+                    runEnd = max(runEnd, planeEnd(q));
+                    last = last + 1;
+                end
+                fseek(obj.fid_, runStart, 'bof');
+                buf = fread(obj.fid_, runEnd - runStart, '*uint8');
+                for kk = k:last
+                    q = order(kk);
+                    a = planeStart(q) - runStart + 1; %scalar range indexing copies a contiguous block
+                    b = planeEnd(q) - runStart;
+                    vals = typecast(buf(a:b), obj.matlabType_);
+                    if obj.needSwap_
+                        vals = swapbytes(vals);
+                    end
+                    stack(:, q) = vals;
+                end
+                k = last + 1;
+            end
+
+            dims = [obj.nchan_, obj.w_, obj.h_, numel(planeIdx)];
+            dims(dims == 1) = [];
+            if numel(dims) > 1
+                stack = reshape(stack, dims);
+            end
+        end
+
         % ----- descriptions ------------------------------------------
         function desc = descriptions(obj)
             obj.ensureOpen_();
