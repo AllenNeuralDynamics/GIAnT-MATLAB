@@ -41,17 +41,15 @@ end
 
 
 function [total, imaged, nKept] = accumulateWithIndexedReader(fn, nchan, maxFrames)
-%ScanImageTiffReader indexes the pages once, then reads just the selected ones
+%ScanImageTiffReader indexes the pages once, then reads just the selected ones,
+%the fastest way for the file's storage (see openStackReader)
 chunkPages = 200;
-r = ScanImageTiffReader(fn);
-closeReader = onCleanup(@() r.close());
-dims = r.shape().dims;
-nPages = dims(end);
-[pages, nKept] = selectedPages(nPages, nchan, maxFrames);
+[r, pages, nParallel, ~, cleanup] = openStackReader(fn, @(nPages) selectedPages(nPages, nchan, maxFrames)); %#ok<ASGLU> cleanup closes r
+nKept = numel(pages) / nchan;
 total = [];
 for c0 = 1:chunkPages:numel(pages)
     chunk = pages(c0:min(c0 + chunkPages - 1, numel(pages)));
-    data = r.dataPlanes(chunk);
+    data = r.dataPlanes(chunk, nParallel);
     if isempty(total)
         total = zeros(size(data,1), size(data,2), nchan);
         imaged = false(size(data,1), size(data,2));

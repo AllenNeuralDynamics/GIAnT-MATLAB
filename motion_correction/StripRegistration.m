@@ -94,7 +94,7 @@ disp(['Aligning: ' [dataDr filesep fn]])
 
 if endsWith(fn, '.h5')
     desc = h5info([dataDr filesep fn]);
-    Ad = single(h5read([dataDr filesep fn], ['/', desc.Datasets.Name]));
+    Ad = single(readStack([dataDr filesep fn], [], 'Dataset', desc.Datasets(1).Name));
 else
     [Ad, meta, desc] = ScanImageTiffWrapper([dataDr filesep fn]);
     Ad = single(Ad);
