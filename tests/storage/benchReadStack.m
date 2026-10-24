@@ -13,6 +13,7 @@ function results = benchReadStack(dataDir, maxGB)
 if nargin < 2 || isempty(maxGB)
     maxGB = 3;
 end
+pool = backgroundPool; fetchOutputs(parfeval(pool, @() 1, 1)); %start the thread pool before timing (a one-time cost per MATLAB session)
 cls = storageClass(fullfile(dataDir, 'x.tif'));
 fprintf('Storage of %s: %s\n', dataDir, cls);
 files = dir(fullfile(dataDir, '**', '*.tif'));
