@@ -1,9 +1,10 @@
-function results = benchReadStack(dataDir, maxGB, order)
+function results = benchReadStack(dataDir, maxGB, order, firstRank)
 %BENCHREADSTACK Compare the previous tiff read with readStack, cold, on dataDir's storage.
 %
 % results = benchReadStack(dataDir, maxGB)
 %
-% Uses the 4 largest tiffs <= maxGB (default 3) under dataDir, one read per
+% Uses the 4 largest tiffs <= maxGB (default 3) under dataDir (from the
+% firstRank-th largest, if given; order 'reverse' swaps methods), one read per
 % file so every read is cold (provided none of them has been read on this
 % machine recently): previous, readStack, readStack, previous, so neither
 % method always gets the larger files. "previous" is the single direct read
@@ -20,6 +21,9 @@ files = dir(fullfile(dataDir, '**', '*.tif'));
 files = files([files.bytes] <= maxGB * 1e9);
 [~, o] = sort([files.bytes], 'descend');
 files = files(o);
+if nargin >= 4 && ~isempty(firstRank) %skip files read by earlier runs (Code Ocean caches them on slower storage)
+    files = files(firstRank:end);
+end
 if numel(files) < 5
     error('benchReadStack:FewFiles', 'Need 5 tiffs <= %g GB under %s; found %d.', maxGB, dataDir, numel(files));
 end
