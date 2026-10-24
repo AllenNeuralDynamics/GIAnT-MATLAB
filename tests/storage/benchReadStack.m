@@ -30,10 +30,12 @@ for k = 1:4
     t = tic;
     if strcmp(methods{k}, 'previous')
         r = ScanImageTiffReader(fn); data = r.data(); r.close(); strategy = 'single read';
+        sec = toc(t);
     else
-        [data, ~, ~, info] = readStack(fn); strategy = info.strategy;
+        data = readStack(fn); %data only, like the previous read (descriptions are timed below)
+        sec = toc(t);
+        [~, ~, ~, info, c] = openStackReader(fn); strategy = info.strategy; clear c
     end
-    sec = toc(t);
     results(end+1) = struct('method', methods{k}, 'file', files(k).name, 'GB', files(k).bytes / 1e9, ...
         'seconds', sec, 'MBps', files(k).bytes / 1e6 / sec, 'strategy', strategy); %#ok<AGROW>
     fprintf('%-10s %6.1f s %7.0f MB/s  (%.2f GB, %s)  %s\n', methods{k}, sec, files(k).bytes / 1e6 / sec, ...
@@ -42,9 +44,11 @@ for k = 1:4
 end
 
 fn = fullfile(files(5).folder, files(5).name);
-r = ScanImageTiffReader(fn); n = r.shape().dims(end); r.close();
-t = tic; [~, ~, ~, info] = readStack(fn, 1:10:n); sec = toc(t);
-fprintf('readStack, 1 page in 10: %.1f s for %d of %d pages (%s)  %s\n', sec, numel(1:10:n), n, info.strategy, files(5).name);
+r = ScanImageTiffReader(fn); n = r.shape().dims(end);
+t = tic; r.descriptions(); tDesc = toc(t); r.close();
+fprintf('page descriptions (all %d pages, as ScanImageTiffWrapper callers request them): %.1f s  %s\n', n, tDesc, files(5).name);
+t = tic; readStack(fn, 1:10:n); sec = toc(t);
+fprintf('readStack, 1 page in 10: %.1f s for %d of %d pages  %s\n', sec, numel(1:10:n), n, files(5).name);
 
 prev = [results(strcmp({results.method}, 'previous')).MBps];
 new = [results(strcmp({results.method}, 'readStack')).MBps];

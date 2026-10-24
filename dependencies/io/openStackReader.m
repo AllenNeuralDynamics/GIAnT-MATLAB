@@ -21,8 +21,11 @@ function [r, planes, nParallel, info, cleanup] = openStackReader(fn, selection, 
 %   SMB share      copy to local scratch first when >= 25% of the file is
 %                  needed (the OS copy is ~4x faster than reading over SMB),
 %                  otherwise parallel direct reads
-%   FUSE (S3), NFS parallel direct reads (S3 mounts give ~40 MB/s per read
-%                  stream and do not cache, so copying does not help)
+%   FUSE (S3)      parallel direct reads: S3 mounts give ~40-50 MB/s per read
+%                  stream and do not cache, so copying does not help; 8
+%                  concurrent reads reach ~170 MB/s on Code Ocean
+%   NFS            direct reads (Code Ocean EFS: ~800 MB/s single stream,
+%                  slower with concurrent reads)
 % info reports the storage class and strategy used.
 
 if nargin < 2
@@ -61,7 +64,7 @@ if strcmpi(strategy, 'auto')
             else
                 strategy = 'parallel';
             end
-        case {'fuse', 'nfs'}
+        case 'fuse'
             strategy = 'parallel';
         otherwise
             strategy = 'direct';
