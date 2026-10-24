@@ -58,19 +58,49 @@ end
 
 function cls = unixClass(folder)
 cls = 'local';
-[status, out] = system(sprintf('findmnt -n -o FSTYPE -T "%s" 2>/dev/null', folder));
-if status ~= 0 || isempty(strtrim(out))
-    [status, out] = system(sprintf('df -T "%s" 2>/dev/null | tail -1 | awk ''{print $2}''', folder));
-    if status ~= 0
-        return
-    end
+fstype = mountType(folder);
+if isempty(fstype)
+    return
 end
-fstype = lower(strtrim(out));
 if startsWith(fstype, 'fuse')
     cls = 'fuse';
 elseif startsWith(fstype, 'nfs')
     cls = 'nfs';
 elseif any(strcmp(fstype, {'cifs', 'smb3', 'smbfs'}))
     cls = 'smb';
+end
+end
+
+
+function fstype = mountType(folder)
+%file system type of the mount containing folder: the longest mount point
+%in /proc/mounts that prefixes it (Linux; no shell needed), else df -T
+fstype = '';
+folder = char(folder);
+try
+    target = folder;
+    try
+        target = char(java.io.File(folder).getCanonicalPath()); %resolve symlinks
+    catch
+    end
+    lines = splitlines(fileread('/proc/mounts'));
+    best = 0;
+    for k = 1:numel(lines)
+        parts = strsplit(strtrim(lines{k}));
+        if numel(parts) < 3
+            continue
+        end
+        mnt = strrep(parts{2}, '\040', ' ');
+        if (strcmp(target, mnt) || startsWith(target, [regexprep(mnt, '/$', '') '/']) || strcmp(mnt, '/')) ...
+                && numel(mnt) > best
+            best = numel(mnt);
+            fstype = lower(parts{3});
+        end
+    end
+catch
+    [status, out] = system(sprintf('df -T "%s" 2>/dev/null | tail -1 | awk ''{print $2}''', folder));
+    if status == 0
+        fstype = lower(strtrim(out));
+    end
 end
 end

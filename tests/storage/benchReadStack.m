@@ -1,4 +1,4 @@
-function results = benchReadStack(dataDir, maxGB)
+function results = benchReadStack(dataDir, maxGB, order)
 %BENCHREADSTACK Compare the previous tiff read with readStack, cold, on dataDir's storage.
 %
 % results = benchReadStack(dataDir, maxGB)
@@ -25,6 +25,9 @@ if numel(files) < 5
 end
 
 methods = {'previous', 'readStack', 'readStack', 'previous'};
+if nargin >= 3 && strcmpi(order, 'reverse')
+    methods = {'readStack', 'previous', 'previous', 'readStack'};
+end
 results = struct('method', {}, 'file', {}, 'GB', {}, 'seconds', {}, 'MBps', {}, 'strategy', {});
 for k = 1:4
     fn = fullfile(files(k).folder, files(k).name);
