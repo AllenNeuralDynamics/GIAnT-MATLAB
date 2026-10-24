@@ -1,11 +1,6 @@
 function  [IM, meanIM, IMc, aData, peaks, discardFrames]= loadAndProcessTrialAsync(mocoDr, fn, numChannels, params)
 % mocoDr: directory with motion-corrected outputs (downsampled registered TIFF/H5 and *_ALIGNMENTDATA.h5).
-    if endsWith(fn, '.h5')
-        desc = h5info([mocoDr filesep fn]);
-        IM = h5read([mocoDr filesep fn], ['/', desc.Datasets.Name]);
-    else
-        IM = ScanImageTiffWrapper([mocoDr filesep fn]);
-    end
+    IM = readStack([mocoDr filesep fn]); %registered tiff or h5
     IM = reshape(IM, size(IM,1), size(IM,2), numChannels, []); %deinterleave;
 
     meanIM= mean(IM,4, 'omitnan');

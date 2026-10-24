@@ -42,6 +42,18 @@ classdef ScanImageTiffReader < handle
         function out = apiVersion()
             out = 'ScanImageTiffReader (pure MATLAB)';
         end
+
+        function buf = readByteRange_(filename, offset, nbytes)
+            %READBYTERANGE_ Read nbytes starting at offset, with a private file handle.
+            fid = fopen(filename, 'r');
+            assert(fid > 0, 'ScanImageTiffReader:OpenFailed', 'Could not open file %s', filename);
+            closeFile = onCleanup(@() fclose(fid));
+            fseek(fid, offset, 'bof');
+            buf = fread(fid, nbytes, '*uint8');
+            assert(numel(buf) == nbytes, 'ScanImageTiffReader:ShortRead', ...
+                'Read %d of %d bytes at offset %d of %s', numel(buf), nbytes, offset, filename);
+        end
+
     end
 
     % -----------------------------------------------------------------
@@ -150,88 +162,84 @@ classdef ScanImageTiffReader < handle
         end
 
         % ----- dataPlanes --------------------------------------------
-        function stack = dataPlanes(obj, planeIdx)
+        function stack = dataPlanes(obj, planeIdx, nParallel)
             %DATAPLANES Read only the given planes (IFDs), in the order given.
             %   stack = reader.dataPlanes(planeIdx) returns the same layout as
             %   data() with nplanes = numel(planeIdx), reading each plane's
             %   strips directly, so memory scales with the planes requested
-            %   rather than the file.
+            %   rather than the file. Nearby planes are read together in
+            %   sequential reads of up to 64 MB.
+            %
+            %   stack = reader.dataPlanes(planeIdx, nParallel) issues up to
+            %   nParallel of those reads concurrently (thread-based
+            %   backgroundPool). This is much faster on storage where each
+            %   read waits on the network (object-store mounts, NFS, SMB).
+            %   Falls back to sequential reads if no pool is available.
+            if nargin < 3 || isempty(nParallel)
+                nParallel = 1;
+            end
             obj.ensureOpen_();
             planeIdx = planeIdx(:)';
             assert(all(planeIdx >= 1 & planeIdx <= obj.nplanes_ & planeIdx == round(planeIdx)), ...
                 'ScanImageTiffReader:InvalidPlane', 'Plane indices must be integers in 1..%d.', obj.nplanes_);
 
-            precision      = ['*' obj.matlabType_];
             samplesPerPlane = obj.nchan_ * obj.w_ * obj.h_;
             stack = zeros(samplesPerPlane, numel(planeIdx), obj.matlabType_);
+            % Parallel reads are long contiguous pieces (about 1/nParallel of the
+            % data each, 64-512 MB) so each concurrent read streams sequentially and
+            % network read-ahead keeps up; sequential reads use 64 MB pieces.
+            maxRunBytes = 64e6;
+            if nParallel > 1
+                totalBytes = numel(planeIdx) * samplesPerPlane * obj.bytesPerSample_;
+                maxRunBytes = min(512e6, max(64e6, ceil(totalBytes / nParallel)));
+            end
+            [runs, scattered] = obj.planReads_(planeIdx, samplesPerPlane, maxRunBytes);
 
-            % Byte range of each requested plane; planes stored as one
-            % contiguous block are read together with nearby planes in long
-            % sequential reads (much faster than one read per plane,
-            % especially on network drives), skipping only large gaps.
-            maxGapBytes = 8e6;   % read through gaps up to this size
-            maxRunBytes = 64e6;  % bound on a single read (and its buffer)
-            nReq = numel(planeIdx);
-            planeStart = zeros(1, nReq);
-            planeEnd   = zeros(1, nReq);
-            isBlock    = false(1, nReq);
-            for p = 1:nReq
+            % planes whose strips are scattered within the plane: read strip by strip
+            precision = ['*' obj.matlabType_];
+            for p = scattered
                 ss = obj.ifdStrips_{planeIdx(p)};
-                offsets = [ss.offset];
-                nbytes  = [ss.nbytes];
-                isBlock(p) = all(offsets(2:end) == offsets(1:end-1) + nbytes(1:end-1)) ...
-                    && sum(nbytes) == samplesPerPlane * obj.bytesPerSample_;
-                planeStart(p) = offsets(1);
-                planeEnd(p)   = offsets(1) + sum(nbytes);
+                pos = 1;
+                for j = 1:numel(ss)
+                    nSamp = ss(j).nbytes / obj.bytesPerSample_;
+                    fseek(obj.fid_, ss(j).offset, 'bof');
+                    stack(pos:pos + nSamp - 1, p) = fread(obj.fid_, nSamp, precision, 0, obj.machfmt_);
+                    pos = pos + nSamp;
+                end
             end
 
-            [~, order] = sort(planeStart);
-            k = 1;
-            while k <= nReq
-                p = order(k);
-                if ~isBlock(p) % strips scattered within the plane: read them one by one
-                    ss = obj.ifdStrips_{planeIdx(p)};
-                    pos = 1;
-                    for j = 1:numel(ss)
-                        nSamp = ss(j).nbytes / obj.bytesPerSample_;
-                        fseek(obj.fid_, ss(j).offset, 'bof');
-                        stack(pos:pos + nSamp - 1, p) = fread(obj.fid_, nSamp, precision, 0, obj.machfmt_);
-                        pos = pos + nSamp;
-                    end
-                    k = k + 1;
-                    continue
+            if nParallel > 1 && numel(runs) > 1
+                try
+                    stack = obj.readRunsParallel_(runs, stack, nParallel);
+                    runs = [];
+                catch err
+                    warning('ScanImageTiffReader:ParallelReadFailed', ...
+                        'Parallel read failed (%s); reading sequentially.', err.message);
                 end
-                % extend the run over following planes that are close by
-                runStart = planeStart(p);
-                runEnd   = planeEnd(p);
-                last = k;
-                while last < nReq
-                    q = order(last + 1);
-                    if ~isBlock(q) || planeStart(q) - runEnd > maxGapBytes || planeEnd(q) - runStart > maxRunBytes
-                        break
-                    end
-                    runEnd = max(runEnd, planeEnd(q));
-                    last = last + 1;
-                end
-                fseek(obj.fid_, runStart, 'bof');
-                buf = fread(obj.fid_, runEnd - runStart, '*uint8');
-                for kk = k:last
-                    q = order(kk);
-                    a = planeStart(q) - runStart + 1; %scalar range indexing copies a contiguous block
-                    b = planeEnd(q) - runStart;
-                    vals = typecast(buf(a:b), obj.matlabType_);
-                    if obj.needSwap_
-                        vals = swapbytes(vals);
-                    end
-                    stack(:, q) = vals;
-                end
-                k = last + 1;
+            end
+            for r = 1:numel(runs)
+                fseek(obj.fid_, runs(r).start, 'bof');
+                buf = fread(obj.fid_, runs(r).stop - runs(r).start, '*uint8');
+                stack = obj.unpackRun_(runs(r), buf, stack);
             end
 
             dims = [obj.nchan_, obj.w_, obj.h_, numel(planeIdx)];
             dims(dims == 1) = [];
             if numel(dims) > 1
                 stack = reshape(stack, dims);
+            end
+        end
+
+        % ----- compression -------------------------------------------
+        function c = compression(obj)
+            %COMPRESSION TIFF Compression tag of the first IFD (1 = none).
+            %   This reader only decodes uncompressed data.
+            obj.ensureOpen_();
+            tags = obj.ifdTags_{1};
+            if any([tags.id] == 259)
+                c = double(obj.readTagValue_(tags, 259));
+            else
+                c = 1;
             end
         end
 
@@ -289,6 +297,96 @@ classdef ScanImageTiffReader < handle
     %  Private helpers
     % =================================================================
     methods (Access = private)
+
+        % ----- planReads_ -------------------------------------------
+        function [runs, scattered] = planReads_(obj, planeIdx, samplesPerPlane, maxRunBytes)
+            % Group the requested planes into sequential reads ("runs"):
+            % nearby planes stored as contiguous blocks are read together,
+            % reading through gaps up to maxGapBytes, each run at most
+            % maxRunBytes. Planes with scattered strips are returned
+            % separately (positions in planeIdx).
+            maxGapBytes = 8e6;
+            nReq = numel(planeIdx);
+            planeStart = zeros(1, nReq);
+            planeEnd   = zeros(1, nReq);
+            isBlock    = false(1, nReq);
+            for p = 1:nReq
+                ss = obj.ifdStrips_{planeIdx(p)};
+                offsets = [ss.offset];
+                nbytes  = [ss.nbytes];
+                isBlock(p) = all(offsets(2:end) == offsets(1:end-1) + nbytes(1:end-1)) ...
+                    && sum(nbytes) == samplesPerPlane * obj.bytesPerSample_;
+                planeStart(p) = offsets(1);
+                planeEnd(p)   = offsets(1) + sum(nbytes);
+            end
+            scattered = find(~isBlock);
+            blocks = find(isBlock);
+            [~, o] = sort(planeStart(blocks));
+            blocks = blocks(o);
+
+            runs = struct('start', {}, 'stop', {}, 'planes', {}, 'planeStart', {}, 'planeEnd', {});
+            k = 1;
+            while k <= numel(blocks)
+                runStart = planeStart(blocks(k));
+                runEnd   = planeEnd(blocks(k));
+                last = k;
+                while last < numel(blocks)
+                    q = blocks(last + 1);
+                    if planeStart(q) - runEnd > maxGapBytes || planeEnd(q) - runStart > maxRunBytes
+                        break
+                    end
+                    runEnd = max(runEnd, planeEnd(q));
+                    last = last + 1;
+                end
+                members = blocks(k:last);
+                runs(end+1) = struct('start', runStart, 'stop', runEnd, 'planes', members, ...
+                    'planeStart', planeStart(members), 'planeEnd', planeEnd(members)); %#ok<AGROW>
+                k = last + 1;
+            end
+        end
+
+        % ----- unpackRun_ -------------------------------------------
+        function stack = unpackRun_(obj, run, buf, stack)
+            for m = 1:numel(run.planes)
+                a = run.planeStart(m) - run.start + 1; %scalar range indexing copies a contiguous block
+                b = run.planeEnd(m) - run.start;
+                vals = typecast(buf(a:b), obj.matlabType_);
+                if obj.needSwap_
+                    vals = swapbytes(vals);
+                end
+                stack(:, run.planes(m)) = vals;
+            end
+        end
+
+        % ----- readRunsParallel_ ------------------------------------
+        function stack = readRunsParallel_(obj, runs, stack, nParallel)
+            % Each run is read by a backgroundPool thread with its own file
+            % handle; at most nParallel reads are in flight, and runs are
+            % unpacked as they complete so buffers do not accumulate.
+            pool = backgroundPool;
+            nParallel = min(nParallel, pool.NumWorkers);
+            if nParallel < 2
+                error('ScanImageTiffReader:NoParallelPool', 'backgroundPool has %d worker(s).', pool.NumWorkers);
+            end
+            fn = obj.filename_;
+            futures = parallel.FevalFuture.empty;
+            owner = zeros(1, 0);
+            next = 1;
+            nDone = 0;
+            cancelAll = onCleanup(@() cancel(futures));
+            while nDone < numel(runs)
+                while next <= numel(runs) && sum(strcmp({futures.State}, 'queued') | strcmp({futures.State}, 'running')) < nParallel
+                    futures(end+1) = parfeval(pool, @ScanImageTiffReader.readByteRange_, 1, ...
+                        fn, runs(next).start, runs(next).stop - runs(next).start); %#ok<AGROW>
+                    owner(end+1) = next; %#ok<AGROW>
+                    next = next + 1;
+                end
+                [idx, buf] = fetchNext(futures);
+                stack = obj.unpackRun_(runs(owner(idx)), buf, stack);
+                nDone = nDone + 1;
+            end
+        end
+
 
         function ensureOpen_(obj)
             if obj.fid_ < 0

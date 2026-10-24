@@ -76,6 +76,23 @@ MultiRoiRegistration;   % or BandRegistration
 SILo;                   % isSLAP2 = true
 ```
 
+## Reading data on network and cloud storage
+
+GIAnT reads tiff and h5 stacks through `readStack`, which detects the storage each file is on (`storageClass`) and reads it the fastest way measured for that storage:
+
+| Storage | Strategy |
+| --- | --- |
+| Local disk | direct reads |
+| Windows network share (SMB) | copy to local scratch first when at least 25% of the file is needed, otherwise parallel reads |
+| FUSE mount, e.g. Code Ocean external (S3) data assets | parallel reads (about 7x faster than a single read stream) |
+| NFS, e.g. Code Ocean internal data assets | direct reads |
+
+Parallel reads use MATLAB's thread-based `backgroundPool`, so they need the Parallel Computing Toolbox to run more than one read at a time. Environment variables:
+- `GIANT_SCRATCH`: folder for temporary copies (default `tempdir`). On Code Ocean, use `/scratch`.
+- `GIANT_STORAGE_CLASS`: override detection (`local`, `smb`, `fuse` or `nfs`).
+
+`tests/storage/testReadStack(folder)` checks that every strategy returns identical data on a folder's storage, and `tests/storage/benchReadStack(folder)` compares read speeds.
+
 ## Epoch and analysis trial
 
 For each experiment we break the data into **epochs** and **analysis trials**.
