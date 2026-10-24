@@ -185,7 +185,15 @@ classdef ScanImageTiffReader < handle
 
             samplesPerPlane = obj.nchan_ * obj.w_ * obj.h_;
             stack = zeros(samplesPerPlane, numel(planeIdx), obj.matlabType_);
-            [runs, scattered] = obj.planReads_(planeIdx, samplesPerPlane);
+            % Parallel reads are long contiguous pieces (about 1/nParallel of the
+            % data each, 64-512 MB) so each concurrent read streams sequentially and
+            % network read-ahead keeps up; sequential reads use 64 MB pieces.
+            maxRunBytes = 64e6;
+            if nParallel > 1
+                totalBytes = numel(planeIdx) * samplesPerPlane * obj.bytesPerSample_;
+                maxRunBytes = min(512e6, max(64e6, ceil(totalBytes / nParallel)));
+            end
+            [runs, scattered] = obj.planReads_(planeIdx, samplesPerPlane, maxRunBytes);
 
             % planes whose strips are scattered within the plane: read strip by strip
             precision = ['*' obj.matlabType_];
@@ -291,14 +299,13 @@ classdef ScanImageTiffReader < handle
     methods (Access = private)
 
         % ----- planReads_ -------------------------------------------
-        function [runs, scattered] = planReads_(obj, planeIdx, samplesPerPlane)
+        function [runs, scattered] = planReads_(obj, planeIdx, samplesPerPlane, maxRunBytes)
             % Group the requested planes into sequential reads ("runs"):
             % nearby planes stored as contiguous blocks are read together,
             % reading through gaps up to maxGapBytes, each run at most
             % maxRunBytes. Planes with scattered strips are returned
             % separately (positions in planeIdx).
             maxGapBytes = 8e6;
-            maxRunBytes = 64e6;
             nReq = numel(planeIdx);
             planeStart = zeros(1, nReq);
             planeEnd   = zeros(1, nReq);
