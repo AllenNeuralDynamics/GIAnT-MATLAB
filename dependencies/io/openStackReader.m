@@ -27,7 +27,7 @@ function [r, planes, nParallel, info, cleanup] = openStackReader(fn, selection, 
 %               at a time (~11 s); after the copy that walk is local (<1 s)
 %   NFS         direct reads (Code Ocean EFS: ~800 MB/s single stream)
 % Without scratch space, FUSE files are read in place with parallel reads.
-% On remote storage the page index is predicted from ScanImage's fixed page
+% On SMB and FUSE storage the page index is predicted from ScanImage's fixed page
 % spacing where possible (ScanImageTiffReader 'predict', verified).
 % info reports the storage class, strategy and index method used.
 
@@ -61,10 +61,10 @@ if strcmp(strategy, 'pcopy') %decided before opening fn: opening it in place is 
 end
 
 if isempty(r)
-    if strcmp(info.storage, 'local') %on remote storage every IFD read waits on the network
-        r = ScanImageTiffReader(fn, 'walk');
-    else
+    if any(strcmp(info.storage, {'smb', 'fuse'})) %every IFD read waits on the network
         r = ScanImageTiffReader(fn, 'predict');
+    else %local disk, NFS: walking the IFDs is already fast
+        r = ScanImageTiffReader(fn, 'walk');
     end
     cleanup = onCleanup(@() r.close());
 end
