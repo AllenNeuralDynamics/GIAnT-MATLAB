@@ -111,6 +111,7 @@ if params.isSLAP2
         selPx2D = selPx2D(1:size(alignDataSlap2.viewC,1), 1:size(alignDataSlap2.viewC,2));
         nPx = numel(selPx2D);
         meanIM = meanIM(1:size(alignDataSlap2.viewC,1), 1:size(alignDataSlap2.viewC,2),:);
+        roiData = shiftRoiData(roiData, [0 0], size(selPx2D)); %masks are on SILo's consensus canvas; crop/pad them to this trial's grid, which shares its top left corner
         labeled = medfilt2(meanIM(:,:,params.activityChannel), [3 3]);
         labeled = ~isnan(meanIM(:,:,params.activityChannel)) & labeled>3*prctile(labeled(~isnan(labeled)), 25); %labeled pixels
         
@@ -196,6 +197,7 @@ if params.isSLAP2
         CD.motionR = alignData.motionR;
         
         meanIM = meanIM(1:size(IM,1), 1:size(IM,2),:);
+        roiData = shiftRoiData(roiData, [0 0], [size(IM,1) size(IM,2)]); %masks are on SILo's consensus canvas; crop/pad them to this trial's grid
         scored = medfilt2(meanIM(:,:,params.activityChannel), [3 3]);
         scored = (scored-prctile(scored(:),25,'all'))./(prctile(scored(:),99,'all')-prctile(scored(:),25,'all'));
         labeled = scored>0.1;

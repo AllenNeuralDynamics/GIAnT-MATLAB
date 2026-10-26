@@ -65,13 +65,15 @@ switch fnName
         error('Unknown function name passed to setParams.m')
 end
 
+userFields = {};
 if nargin>1 %if the user specified parameters, add in the user parameters, use defaults for remaining, NO GUI
-    params = resolveDropdownDefaults(params);
     paramsIn = coerceLegacyParamNames(paramsIn);
     for field = fieldnames(paramsIn)'
          params.(field{1}) = paramsIn.(field{1});
     end
+    userFields = fieldnames(paramsIn);
     if nargin<3 || ~forceGUI
+        params = resolveDropdownDefaults(params, userFields);
         return
     end
 end
@@ -80,7 +82,7 @@ end
 if ~isInteractiveSession() %nobody can answer the GUI; it would wait forever
     warning('setParams:NonInteractive', ...
         'No interactive display; using default %s parameters instead of the parameter GUI.', fnName);
-    params = coerceLegacyParamNames(resolveDropdownDefaults(params));
+    params = coerceLegacyParamNames(resolveDropdownDefaults(params, userFields));
     return
 end
 paramsIn = optionsGUI(params, tooltips, fnName);
@@ -88,13 +90,14 @@ params = coerceLegacyParamNames(paramsIn);
 
 end
 
-function params = resolveDropdownDefaults(params)
+function params = resolveDropdownDefaults(params, userFields)
 %RESOLVEDROPDOWNDEFAULTS Replace dropdown option lists with their default (first) choice.
 % Cell-valued defaults list the options optionsGUI offers as a dropdown, each a
 % MATLAB expression (e.g. {'''poisson''','''correlation'''}). Without the GUI,
 % use the first option, evaluated as optionsGUI does, so callers get a value
-% rather than the option list.
-for field = fieldnames(params)'
+% rather than the option list. Fields in userFields were set by the caller and
+% are left as given.
+for field = setdiff(fieldnames(params), userFields)'
     val = params.(field{1});
     if iscell(val) && ~isempty(val) && ischar(val{1})
         params.(field{1}) = eval(val{1});
