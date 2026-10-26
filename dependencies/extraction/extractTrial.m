@@ -468,6 +468,12 @@ nPages= floor(size(A,2)./denoiseWindow);
 totSamps = nPages*denoiseWindow;
 t = 1:size(A,2);
 
+if nPages < 2 %trial too short to interpolate between pages; use a constant low-pass component
+    LP = repmat(mean(A,2,'omitmissing'), 1, size(A,2));
+    HP = A-LP;
+    return
+end
+
 a = reshape(A(:,1:totSamps), size(A,1), denoiseWindow, nPages); % #pixels x #samps/page x #pages
 Ma = squeeze(mean(a,2, 'omitmissing'));
 SMa = smoothdata(Ma,2, 'lowess',LPfactor, 'omitmissing');
