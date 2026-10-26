@@ -13,7 +13,7 @@ function [data, meta, desc, info] = readStack(fn, planes, varargin)
 % h5 files: data is as from h5read (first dataset unless 'Dataset' is given);
 % meta and desc are empty.
 %
-% Options: 'Strategy' ('auto', 'direct', 'copy', 'parallel'), 'ScratchDir',
+% Options: 'Strategy' ('auto', 'direct', 'copy', 'pcopy', 'parallel'), 'ScratchDir',
 % 'NumParallel', 'Dataset' (h5). How 'auto' chooses per storage (local, SMB,
 % S3/FUSE, NFS) is described in openStackReader. info reports the storage
 % class and strategy used.

@@ -7,26 +7,29 @@ function [r, planes, nParallel, info, cleanup] = openStackReader(fn, selection, 
 %             handle @(nPlanes) returning plane indices (for callers that need
 %             the plane count to choose them)
 % opts      - struct with optional fields:
-%             Strategy    'auto' (default), 'direct', 'copy' or 'parallel'
+%             Strategy    'auto' (default), 'direct', 'copy', 'pcopy' or 'parallel'
 %             ScratchDir  folder for temporary copies (default: GIANT_SCRATCH
 %                         environment variable, else tempdir)
-%             NumParallel concurrent reads for 'parallel' (default 8)
+%             NumParallel concurrent reads for 'parallel' and 'pcopy' (default 8)
 %
 % Read the planes with r.dataPlanes(planes, nParallel), or r.data() when all
 % planes are wanted and nParallel is 1. Keep cleanup until reading is done:
 % clearing it closes the reader and deletes any temporary copy.
 %
 % Strategy 'auto' follows measurements on SLAP2 recordings:
-%   local disk     direct reads
-%   SMB share      copy to local scratch first when >= 25% of the file is
-%                  needed (the OS copy is ~4x faster than reading over SMB),
-%                  otherwise parallel direct reads
-%   FUSE (S3)      parallel direct reads: S3 mounts give ~40-50 MB/s per read
-%                  stream and do not cache, so copying does not help; 8
-%                  concurrent reads reach ~170 MB/s on Code Ocean
-%   NFS            direct reads (Code Ocean EFS: ~800 MB/s single stream,
-%                  slower with concurrent reads)
-% info reports the storage class and strategy used.
+%   local disk  direct reads
+%   SMB share   copy to local scratch first ('copy', the OS copy is ~4x faster
+%               than reading over SMB) when >= 25% of the file is needed,
+%               otherwise parallel direct reads
+%   FUSE (S3)   parallel copy to local scratch ('pcopy'): S3 mounts give ~45
+%               MB/s per read stream but ~300 MB/s with 8 concurrent reads, and
+%               opening the tiff in place walks ~4,000 page headers one request
+%               at a time (~11 s); after the copy that walk is local (<1 s)
+%   NFS         direct reads (Code Ocean EFS: ~800 MB/s single stream)
+% Without scratch space, FUSE files are read in place with parallel reads.
+% On remote storage the page index is predicted from ScanImage's fixed page
+% spacing where possible (ScanImageTiffReader 'predict', verified).
+% info reports the storage class, strategy and index method used.
 
 if nargin < 2
     selection = [];
@@ -34,7 +37,7 @@ end
 if nargin < 3 || isempty(opts)
     opts = struct();
 end
-strategy = getOpt(opts, 'Strategy', 'auto');
+strategy = lower(getOpt(opts, 'Strategy', 'auto'));
 scratchDir = getOpt(opts, 'ScratchDir', '');
 if isempty(scratchDir)
     scratchDir = getenv('GIANT_SCRATCH');
@@ -45,16 +48,138 @@ end
 numParallel = getOpt(opts, 'NumParallel', 8);
 
 info = struct('file', fn, 'storage', storageClass(fn), 'strategy', '', 'copy', '', 'index', '');
-%on remote storage every IFD read waits on the network: infer the page index
-%from ScanImage's fixed page spacing (verified, else the full walk is used)
-if strcmp(info.storage, 'local')
-    indexMode = 'walk';
-else
-    indexMode = 'predict';
+if strcmp(strategy, 'auto') && strcmp(info.storage, 'fuse')
+    strategy = 'pcopy';
 end
-r = ScanImageTiffReader(fn, indexMode);
-cleanup = onCleanup(@() r.close());
-nPlanes = r.shape().dims(end);
+
+r = [];
+if strcmp(strategy, 'pcopy') %decided before opening fn: opening it in place is the slow part
+    [r, cleanup, info.copy] = openLocalCopy(fn, scratchDir, @(src, dst) parallelCopy(src, dst, numParallel));
+    if isempty(r)
+        strategy = 'parallel';
+    end
+end
+
+if isempty(r)
+    if strcmp(info.storage, 'local') %on remote storage every IFD read waits on the network
+        r = ScanImageTiffReader(fn, 'walk');
+    else
+        r = ScanImageTiffReader(fn, 'predict');
+    end
+    cleanup = onCleanup(@() r.close());
+end
+planes = selectPlanes(selection, r.shape().dims(end));
+
+if strcmp(strategy, 'auto')
+    switch info.storage
+        case 'smb'
+            if numel(planes) >= 0.25 * r.shape().dims(end)
+                strategy = 'copy';
+            else
+                strategy = 'parallel';
+            end
+        otherwise
+            strategy = 'direct';
+    end
+end
+
+if strcmp(strategy, 'copy')
+    [rLocal, cleanupLocal, info.copy] = openLocalCopy(fn, scratchDir, @copyWithRetries);
+    if isempty(rLocal)
+        strategy = 'parallel';
+    else
+        clear cleanup %closes the reader on the original
+        r = rLocal;
+        cleanup = cleanupLocal;
+    end
+end
+
+if strcmp(strategy, 'parallel')
+    nParallel = numParallel;
+else
+    nParallel = 1;
+end
+info.strategy = strategy;
+info.index = r.indexMethod();
+end
+
+
+function [r, cleanup, localCopy] = openLocalCopy(fn, scratchDir, copyFcn)
+%copy fn to scratch and open the copy; r is empty (with a warning) if that fails
+r = [];
+cleanup = [];
+localCopy = '';
+d = dir(fn);
+if freeBytes(scratchDir) < 1.1 * d.bytes + 1e9
+    warning('openStackReader:NoScratchSpace', ...
+        'Not enough free space in %s to copy %s; reading it in place.', scratchDir, fn);
+    return
+end
+[~, ~, ext] = fileparts(fn);
+tmp = [tempname(scratchDir) ext];
+try
+    copyFcn(fn, tmp);
+    r = ScanImageTiffReader(tmp, 'walk');
+    cleanup = onCleanup(@() closeAndDelete(r, tmp));
+    localCopy = tmp;
+catch err
+    deleteIfExists(tmp);
+    warning('openStackReader:CopyFailed', ...
+        'Could not copy %s to %s (%s); reading it in place.', fn, scratchDir, err.message);
+end
+end
+
+
+function parallelCopy(src, dst, nParallel)
+%copy src to dst with nParallel concurrent readers, each streaming one
+%contiguous part of the file; much faster than a single stream on S3 mounts
+d = dir(src);
+nBytes = d.bytes;
+pool = backgroundPool;
+nParallel = min(nParallel, pool.NumWorkers);
+if nParallel < 2 || nBytes < 64e6
+    copyWithRetries(src, dst);
+    return
+end
+raf = java.io.RandomAccessFile(dst, 'rw'); %preallocate (MATLAB's fseek cannot move past
+raf.setLength(nBytes);                     %the end of a file), so each part is written in place
+raf.close();
+edges = round(linspace(0, nBytes, nParallel + 1));
+futures(nParallel) = parallel.FevalFuture;
+for k = 1:nParallel
+    futures(k) = parfeval(pool, @copyRange, 0, src, dst, edges(k), edges(k + 1) - edges(k));
+end
+wait(futures);
+errs = {futures.Error};
+failed = find(~cellfun(@isempty, errs), 1);
+if ~isempty(failed)
+    error('openStackReader:ParallelCopyFailed', 'Part %d failed: %s', failed, errs{failed}.message);
+end
+d2 = dir(dst);
+assert(d2.bytes == nBytes, 'openStackReader:CopyIncomplete', 'Copy is %d of %d bytes', d2.bytes, nBytes);
+end
+
+
+function copyRange(src, dst, offset, nBytes)
+fi = fopen(src, 'r');
+fo = fopen(dst, 'r+');
+closeBoth = onCleanup(@() cellfun(@(f) fclose(f), {fi, fo}));
+assert(fi > 0 && fo > 0, 'openStackReader:OpenFailed', 'Could not open %s or %s', src, dst);
+fseek(fi, offset, 'bof');
+fseek(fo, offset, 'bof');
+remaining = nBytes;
+while remaining > 0
+    buf = fread(fi, min(remaining, 64e6), '*uint8');
+    if isempty(buf)
+        error('openStackReader:ShortRead', 'Unexpected end of %s at offset %d', src, offset + nBytes - remaining);
+    end
+    fwrite(fo, buf, 'uint8');
+    remaining = remaining - numel(buf);
+end
+end
+
+
+function planes = selectPlanes(selection, nPlanes)
 if isa(selection, 'function_handle')
     planes = selection(nPlanes);
 elseif isempty(selection)
@@ -62,54 +187,6 @@ elseif isempty(selection)
 else
     planes = selection;
 end
-
-if strcmpi(strategy, 'auto')
-    switch info.storage
-        case 'smb'
-            if numel(planes) >= 0.25 * nPlanes
-                strategy = 'copy';
-            else
-                strategy = 'parallel';
-            end
-        case 'fuse'
-            strategy = 'parallel';
-        otherwise
-            strategy = 'direct';
-    end
-end
-
-if strcmpi(strategy, 'copy')
-    d = dir(fn);
-    if freeBytes(scratchDir) < 1.1 * d.bytes + 1e9
-        warning('openStackReader:NoScratchSpace', ...
-            'Not enough free space in %s to copy %s; reading it directly.', scratchDir, fn);
-        strategy = 'parallel';
-    else
-        [~, ~, ext] = fileparts(fn);
-        localCopy = [tempname(scratchDir) ext];
-        try
-            copyWithRetries(fn, localCopy);
-            r.close();
-            r = ScanImageTiffReader(localCopy);
-            cleanup = onCleanup(@() closeAndDelete(r, localCopy));
-            info.copy = localCopy;
-        catch err
-            deleteIfExists(localCopy);
-            warning('openStackReader:CopyFailed', ...
-                'Could not copy %s to %s (%s); reading it directly.', fn, scratchDir, err.message);
-            strategy = 'parallel';
-        end
-    end
-end
-
-switch lower(strategy)
-    case 'parallel'
-        nParallel = numParallel;
-    otherwise
-        nParallel = 1;
-end
-info.strategy = lower(strategy);
-info.index = r.indexMethod();
 end
 
 

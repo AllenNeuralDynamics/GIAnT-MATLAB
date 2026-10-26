@@ -21,7 +21,7 @@ for k = 1:numel(files)
     r = ScanImageTiffReader(fn); ref = r.data(); refMeta = r.metadata(); refDesc = r.descriptions(); r.close();
     n = size(ref, ndims(ref));
     sub = unique([1:7:n n]);
-    for strat = {'direct', 'copy', 'parallel', 'auto'}
+    for strat = {'direct', 'copy', 'pcopy', 'parallel', 'auto'}
         [data, meta, desc, info] = readStack(fn, [], 'Strategy', strat{1});
         ok = isequal(data, ref) && isequal(meta, refMeta) && isequal(desc, refDesc) ...
             && (isempty(info.copy) || ~exist(info.copy, 'file'));
