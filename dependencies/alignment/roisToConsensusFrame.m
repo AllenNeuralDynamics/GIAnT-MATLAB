@@ -19,18 +19,24 @@ function roiEntry = roisToConsensusFrame(roiEntry, fnRegDS, motOutput, targetSz)
 if ~isfield(roiEntry, 'roiData') || isempty(roiEntry.roiData)
     return
 end
-[~, annStem] = fileparts(char(roiEntry.fn));
+%fn is normally the registered file's stem (getAnnotationImage), which can itself
+%contain dots, so match it whole before trying it without an extension
+[~, name, ext] = fileparts(char(roiEntry.fn));
+annName = [name ext];
 stems = cellfun(@(f) stemOf(f), fnRegDS, 'UniformOutput', false);
-trialIx = find(strcmp(stems, annStem), 1);
-if isempty(annStem) || isempty(trialIx)
+trialIx = find(strcmp(stems, annName), 1);
+if isempty(trialIx)
+    trialIx = find(strcmp(stems, name), 1);
+end
+if isempty(annName) || isempty(trialIx)
     warning('roisToConsensusFrame:UnknownTrial', ...
-        'Annotation trial "%s" is not in the trial table; using its ROIs without cross-trial alignment.', annStem);
+        'Annotation trial "%s" is not in the trial table; using its ROIs without cross-trial alignment.', annName);
     return
 end
 offset = motOutput(:, trialIx);
 if any(~isfinite(offset))
     warning('roisToConsensusFrame:TrialNotAligned', ...
-        'Annotation trial "%s" was not aligned across trials; using its ROIs without cross-trial alignment.', annStem);
+        'Annotation trial "%s" was not aligned across trials; using its ROIs without cross-trial alignment.', annName);
     return
 end
 roiEntry.roiData = shiftRoiData(roiEntry.roiData, -offset(:)', targetSz);

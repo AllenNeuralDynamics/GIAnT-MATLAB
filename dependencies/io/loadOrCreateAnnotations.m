@@ -44,7 +44,7 @@ end
 [ROIs, resolved] = importPostAcqAnnotations(trialTable, keepTrials, mocodr);
 for DMDix = 1:min(nDMDs, numel(saved)) %keep paths already annotated in annotations.h5
     if ~isempty(saved(DMDix).fn)
-        for fld = {'dr', 'fn', 'roiData', 'alignmentShiftRC', 'alignmentNCC'}
+        for fld = fieldnames(saved(DMDix))' %all of it, including any stored image
             ROIs(DMDix).(fld{1}) = saved(DMDix).(fld{1});
         end
         resolved(DMDix) = true;
