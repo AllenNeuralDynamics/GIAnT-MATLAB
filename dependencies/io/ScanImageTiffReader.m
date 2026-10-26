@@ -464,8 +464,14 @@ classdef ScanImageTiffReader < handle
             obj.indexPredicted_ = false;
             geom = obj.ifdGeometry_();
 
-            if strcmpi(indexMode, 'predict') && obj.buildIndexPredicted_(geom)
-                return
+            if strcmpi(indexMode, 'predict')
+                try
+                    if obj.buildIndexPredicted_(geom)
+                        return
+                    end
+                catch %anything unexpected at a predicted offset: walk instead
+                end
+                obj.ifdTags_ = {}; obj.ifdStrips_ = {}; obj.ifdOffsets_ = []; obj.indexPredicted_ = false;
             end
 
             offset   = obj.firstIfdOffset_;
@@ -516,8 +522,9 @@ classdef ScanImageTiffReader < handle
             raws = obj.readRanges_(offs(samples), rawLen);
             for i = 1:numel(samples)
                 k = samples(i);
-                if numel(raws{i}) ~= rawLen
-                    return
+                if numel(raws{i}) ~= rawLen ...
+                        || double(obj.typecastValue_(raws{i}(1:geom.countSz), geom.countFmt)) ~= numel(t1)
+                    return %not an IFD like IFD 1 (e.g. the page spacing changes)
                 end
                 [tk, sk, nextk] = obj.parseIfdBytes_(raws{i}, offs(k), geom);
                 if k == n
