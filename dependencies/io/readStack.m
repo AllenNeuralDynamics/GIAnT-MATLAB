@@ -48,13 +48,13 @@ try
 catch err
     warning('readStack:Fallback', 'Reading %s with imread (%s).', fn, err.message);
     [data, desc] = readTiffStackImread(fn, planes);
-    info = struct('file', fn, 'storage', storageClass(fn), 'strategy', 'imread', 'copy', '');
+    info = struct('file', fn, 'storage', storageClass(fn), 'strategy', 'imread', 'copy', '', 'index', '');
 end
 end
 
 
 function [data, info] = readH5(fn, planes, opts)
-info = struct('file', fn, 'storage', storageClass(fn), 'strategy', 'direct', 'copy', '');
+info = struct('file', fn, 'storage', storageClass(fn), 'strategy', 'direct', 'copy', '', 'index', '');
 ds = opts.Dataset;
 if isempty(ds)
     h = h5info(fn);

@@ -32,6 +32,11 @@ for k = 1:numel(files)
     end
     ok = isequal(ScanImageTiffWrapper(fn), ref);
     nfail = nfail + check(ok, sprintf('%s via ScanImageTiffWrapper', files(k).name));
+    rp = ScanImageTiffReader(fn, 'predict'); %index inferred from page spacing must give identical results
+    ok = isequal(rp.data(), ref) && isequal(rp.dataPlanes(sub), ref(:,:,sub)) ...
+        && isequal(rp.metadata(), refMeta) && isequal(rp.descriptions(), refDesc);
+    nfail = nfail + check(ok, sprintf('%s with predicted index (used: %s)', files(k).name, rp.indexMethod()));
+    rp.close();
     clear ref data
 end
 if isempty(files)

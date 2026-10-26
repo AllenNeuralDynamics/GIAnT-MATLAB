@@ -44,8 +44,15 @@ if isempty(scratchDir)
 end
 numParallel = getOpt(opts, 'NumParallel', 8);
 
-info = struct('file', fn, 'storage', storageClass(fn), 'strategy', '', 'copy', '');
-r = ScanImageTiffReader(fn);
+info = struct('file', fn, 'storage', storageClass(fn), 'strategy', '', 'copy', '', 'index', '');
+%on remote storage every IFD read waits on the network: infer the page index
+%from ScanImage's fixed page spacing (verified, else the full walk is used)
+if strcmp(info.storage, 'local')
+    indexMode = 'walk';
+else
+    indexMode = 'predict';
+end
+r = ScanImageTiffReader(fn, indexMode);
 cleanup = onCleanup(@() r.close());
 nPlanes = r.shape().dims(end);
 if isa(selection, 'function_handle')
@@ -102,6 +109,7 @@ switch lower(strategy)
         nParallel = 1;
 end
 info.strategy = lower(strategy);
+info.index = r.indexMethod();
 end
 
 
