@@ -179,8 +179,16 @@ classdef ScanImageTiffReader < handle
                 ss = obj.ifdStrips_{planeIdx(p)};
                 offsets = [ss.offset];
                 nbytes  = [ss.nbytes];
-                isBlock(p) = all(offsets(2:end) == offsets(1:end-1) + nbytes(1:end-1)) ...
-                    && sum(nbytes) == samplesPerPlane * obj.bytesPerSample_;
+                tags = obj.ifdTags_{planeIdx(p)};
+                if any([tags.id] == 259)
+                    assert(obj.readTagValue_(tags, 259) == 1, ...
+                        'ScanImageTiffReader:UnsupportedCompression', ...
+                        'Compressed TIFF planes require a decoding reader.');
+                end
+                assert(sum(nbytes) == samplesPerPlane * obj.bytesPerSample_, ...
+                    'ScanImageTiffReader:InvalidPlaneSize', ...
+                    'Strip byte counts do not match the uncompressed plane size.');
+                isBlock(p) = all(offsets(2:end) == offsets(1:end-1) + nbytes(1:end-1));
                 planeStart(p) = offsets(1);
                 planeEnd(p)   = offsets(1) + sum(nbytes);
             end
