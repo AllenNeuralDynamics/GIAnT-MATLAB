@@ -23,7 +23,7 @@ for k = 1:numel(files)
     n = size(ref, ndims(ref));
     sub = unique([1:7:n n]);
     sub = sub([end 1:end-1]); %out of file order
-    for strat = {'direct', 'copy', 'parallel', 'auto'}
+    for strat = {'direct', 'copy', 'pcopy', 'parallel', 'auto'}
         [data, meta, desc, info] = readStack(fn, [], 'Strategy', strat{1});
         ok = isequal(data, ref) && isequal(meta, refMeta) && isequal(desc, refDesc) ...
             && (isempty(info.copy) || ~exist(info.copy, 'file'));
@@ -34,6 +34,11 @@ for k = 1:numel(files)
     end
     ok = isequal(ScanImageTiffWrapper(fn), ref);
     nfail = nfail + check(ok, sprintf('%s via ScanImageTiffWrapper', files(k).name));
+    rp = ScanImageTiffReader(fn, 'predict'); %index inferred from page spacing must give identical results
+    ok = isequal(rp.data(), ref) && isequal(rp.dataPlanes(sub), ref(:,:,sub)) ...
+        && isequal(rp.metadata(), refMeta) && isequal(rp.descriptions(), refDesc);
+    nfail = nfail + check(ok, sprintf('%s with predicted index (used: %s)', files(k).name, rp.indexMethod()));
+    rp.close();
     clear ref data
 end
 if isempty(files)
