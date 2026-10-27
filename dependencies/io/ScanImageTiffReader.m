@@ -37,6 +37,8 @@ classdef ScanImageTiffReader < handle
 
         endOfImageBlock_ = 0
         fileSize_        = 0
+
+        pendingReads_        % parallel reads submitted but not yet unpacked
     end
 
     % -----------------------------------------------------------------
@@ -393,30 +395,40 @@ classdef ScanImageTiffReader < handle
         % ----- readRunsParallel_ ------------------------------------
         function stack = readRunsParallel_(obj, runs, stack, nParallel)
             % Each run is read by a backgroundPool thread with its own file
-            % handle; at most nParallel reads are in flight, and runs are
-            % unpacked as they complete so buffers do not accumulate.
+            % handle. At most nParallel reads are pending (submitted but not
+            % yet unpacked); each is unpacked as it completes and its future
+            % dropped, which frees the future's copy of the buffer. Pending
+            % reads are cancelled if a read fails or this is interrupted.
             pool = backgroundPool;
             nParallel = min(nParallel, pool.NumWorkers);
             if nParallel < 2
                 error('ScanImageTiffReader:NoParallelPool', 'backgroundPool has %d worker(s).', pool.NumWorkers);
             end
             fn = obj.filename_;
-            futures = parallel.FevalFuture.empty;
+            obj.pendingReads_ = parallel.FevalFuture.empty;
+            cancelPending = onCleanup(@() obj.cancelPendingReads_()); %#ok<NASGU> sees reads added later, via obj
             owner = zeros(1, 0);
             next = 1;
-            nDone = 0;
-            cancelAll = onCleanup(@() cancel(futures));
-            while nDone < numel(runs)
-                while next <= numel(runs) && sum(strcmp({futures.State}, 'queued') | strcmp({futures.State}, 'running')) < nParallel
-                    futures(end+1) = parfeval(pool, @ScanImageTiffReader.readByteRange_, 1, ...
-                        fn, runs(next).start, runs(next).stop - runs(next).start); %#ok<AGROW>
+            while next <= numel(runs) || ~isempty(obj.pendingReads_)
+                while next <= numel(runs) && numel(obj.pendingReads_) < nParallel
+                    obj.pendingReads_(end+1) = parfeval(pool, @ScanImageTiffReader.readByteRange_, 1, ...
+                        fn, runs(next).start, runs(next).stop - runs(next).start);
                     owner(end+1) = next; %#ok<AGROW>
                     next = next + 1;
                 end
-                [idx, buf] = fetchNext(futures);
+                [idx, buf] = fetchNext(obj.pendingReads_);
+                obj.pendingReads_(idx) = [];
                 stack = obj.unpackRun_(runs(owner(idx)), buf, stack);
-                nDone = nDone + 1;
+                owner(idx) = [];
             end
+        end
+
+        % ----- cancelPendingReads_ ----------------------------------
+        function cancelPendingReads_(obj)
+            if ~isempty(obj.pendingReads_)
+                cancel(obj.pendingReads_);
+            end
+            obj.pendingReads_ = [];
         end
 
 

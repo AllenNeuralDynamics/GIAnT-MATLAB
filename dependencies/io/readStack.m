@@ -7,11 +7,13 @@ function [data, meta, desc, info] = readStack(fn, planes, varargin)
 % [data, meta, desc, info] = readStack(fn, planes, 'Name', value, ...)
 %
 % Tiffs: data has the layout and class of ScanImageTiffReader.data() (native
-% type, W x H x planes); meta is the reader's metadata and desc the per-page
-% ImageDescription strings (read only when requested). Compressed tiffs, or
-% files the reader cannot parse, are read with imread instead.
+% type, W x H x planes); meta is the reader's metadata and desc the
+% ImageDescription strings of the planes read (read only when requested).
+% Compressed tiffs, or files the reader cannot parse, are read with imread
+% instead.
 % h5 files: data is as from h5read (first dataset unless 'Dataset' is given);
-% meta and desc are empty.
+% meta and desc are empty. A subset is read as one hyperslab spanning its
+% first to last plane, so it suits contiguous or clustered planes.
 %
 % Options: 'Strategy' ('auto', 'direct', 'copy', 'pcopy', 'parallel'), 'ScratchDir',
 % 'NumParallel', 'Dataset' (h5). How 'auto' chooses per storage (local, SMB,
@@ -33,6 +35,7 @@ end
 
 try
     [r, sel, nParallel, info, cleanup] = openStackReader(fn, planes, opts); %#ok<ASGLU> cleanup closes r
+    meta = r.metadata(); %before the compression check, so the imread fallback keeps it
     if r.compression() ~= 1
         error('readStack:Compressed', 'Compressed tiff (compression %d).', r.compression());
     end
@@ -41,9 +44,9 @@ try
     else
         data = r.dataPlanes(sel, nParallel);
     end
-    meta = r.metadata();
     if nargout > 2
         desc = r.descriptions();
+        desc = desc(sel); %the planes read, in order, as from the imread fallback
     end
 catch err
     warning('readStack:Fallback', 'Reading %s with imread (%s).', fn, err.message);
