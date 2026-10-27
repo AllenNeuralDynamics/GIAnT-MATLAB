@@ -106,6 +106,7 @@ classdef ScanImageTiffReader < handle
         % ----- data --------------------------------------------------
         function stack = data(obj)
             obj.ensureOpen_();
+            obj.assertUncompressed_();
 
             nTotalStrips = 0;
             for k = 1:obj.nplanes_
@@ -182,6 +183,7 @@ classdef ScanImageTiffReader < handle
             planeIdx = planeIdx(:)';
             assert(all(planeIdx >= 1 & planeIdx <= obj.nplanes_ & planeIdx == round(planeIdx)), ...
                 'ScanImageTiffReader:InvalidPlane', 'Plane indices must be integers in 1..%d.', obj.nplanes_);
+            obj.assertUncompressed_();
 
             samplesPerPlane = obj.nchan_ * obj.w_ * obj.h_;
             stack = zeros(samplesPerPlane, numel(planeIdx), obj.matlabType_);
@@ -298,6 +300,15 @@ classdef ScanImageTiffReader < handle
     % =================================================================
     methods (Access = private)
 
+        % ----- assertUncompressed_ ----------------------------------
+        function assertUncompressed_(obj)
+            % raw reads copy strip bytes as samples; checked once per read
+            % call, the strip byte counts of each plane in planReads_
+            assert(obj.compression() == 1, ...
+                'ScanImageTiffReader:UnsupportedCompression', ...
+                'Compressed TIFF planes require a decoding reader.');
+        end
+
         % ----- planReads_ -------------------------------------------
         function [runs, scattered] = planReads_(obj, planeIdx, samplesPerPlane, maxRunBytes)
             % Group the requested planes into sequential reads ("runs"):
@@ -314,8 +325,10 @@ classdef ScanImageTiffReader < handle
                 ss = obj.ifdStrips_{planeIdx(p)};
                 offsets = [ss.offset];
                 nbytes  = [ss.nbytes];
-                isBlock(p) = all(offsets(2:end) == offsets(1:end-1) + nbytes(1:end-1)) ...
-                    && sum(nbytes) == samplesPerPlane * obj.bytesPerSample_;
+                assert(sum(nbytes) == samplesPerPlane * obj.bytesPerSample_, ...
+                    'ScanImageTiffReader:InvalidPlaneSize', ...
+                    'Strip byte counts of plane %d do not match the uncompressed plane size.', planeIdx(p));
+                isBlock(p) = all(offsets(2:end) == offsets(1:end-1) + nbytes(1:end-1));
                 planeStart(p) = offsets(1);
                 planeEnd(p)   = offsets(1) + sum(nbytes);
             end
