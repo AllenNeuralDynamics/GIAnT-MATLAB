@@ -177,12 +177,7 @@ if params.isSLAP2
         end
 
     else
-        if endsWith(fn, '.h5')
-            desc = h5info([dr filesep fn]);
-            IM = h5read([dr filesep fn], ['/', desc.Datasets.Name]);
-        else
-            IM = ScanImageTiffWrapper([dr filesep fn]);
-        end
+        IM = readStack([dr filesep fn]); %registered tiff or h5
         IM = double(IM);
 
         %rearrange into correct dimensions
