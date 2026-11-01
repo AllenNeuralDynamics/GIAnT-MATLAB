@@ -80,6 +80,10 @@ if nWorkers > 1
     if isempty(p) || ~isa(p, 'parallel.ProcessPool') || p.NumWorkers ~= nWorkers
         delete(gcp('nocreate'));
         parpool('processes', nWorkers);
+    else
+        % Reusing a pool that may predate the current code: workers cache
+        % compiled functions and would otherwise run stale GIAnT code.
+        refreshPoolWorkerCode(p);
     end
 else
     % A previously opened process pool still consumes RAM even though the

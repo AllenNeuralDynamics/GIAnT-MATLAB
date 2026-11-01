@@ -266,6 +266,10 @@ for DMDix = nDMDs:-1:1
             if poolsize~=nWorkers || ~isa(p, 'parallel.ProcessPool')
                 delete(gcp('nocreate'));
                 parpool('processes',nWorkers);
+            else
+                % Reused pool may predate the current code; see
+                % refreshPoolWorkerCode.
+                refreshPoolWorkerCode(p);
             end
         else
             delete(gcp('nocreate'));
