@@ -31,14 +31,18 @@ function [trialTable, mocoParams, siloParams] = processSLAP2(dr, savedr, useAllF
 % SILo. SILo is forced to run with isSLAP2 = true. If drawUserRois is true,
 % SILo will also open its normal annotation GUI during source extraction.
 
-% Put this repo's dependencies ahead of anything else on the MATLAB path
+% Put this whole repo ahead of anything else on the MATLAB path. Other
+% checkouts (e.g. SLAP2-Voltage-Extraction) carry their own copies of
+% MultiRoiRegistration, SILo and several dependencies; only the top-level
+% folders were previously left to path luck. Parallel workers are pinned the
+% same way by refreshPoolWorkerCode when a pool is created or reused.
 here = fileparts(mfilename('fullpath'));
 repoRoot = here;
 while ~isfolder(fullfile(repoRoot,'dependencies')) && ~strcmp(repoRoot, fileparts(repoRoot))
     repoRoot = fileparts(repoRoot);   % walk up until a 'dependencies' folder is found
 end
 assert(isfolder(fullfile(repoRoot,'dependencies')), 'No dependencies folder found above %s', here);
-addpath(genpath(fullfile(repoRoot,'dependencies')), '-begin');
+addpath(genpath(repoRoot), '-begin');
 rehash;
 
 %% Resolve input/output directories

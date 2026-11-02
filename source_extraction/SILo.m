@@ -265,12 +265,11 @@ for DMDix = nDMDs:-1:1
         if nWorkers>1
             if poolsize~=nWorkers || ~isa(p, 'parallel.ProcessPool')
                 delete(gcp('nocreate'));
-                parpool('processes',nWorkers);
-            else
-                % Reused pool may predate the current code; see
-                % refreshPoolWorkerCode.
-                refreshPoolWorkerCode(p);
+                p = parpool('processes',nWorkers);
             end
+            % Pin this checkout first on the worker path and drop stale
+            % compiled functions; see refreshPoolWorkerCode.
+            refreshPoolWorkerCode(p, fileparts(fileparts(mfilename('fullpath'))));
         else
             delete(gcp('nocreate'));
         end

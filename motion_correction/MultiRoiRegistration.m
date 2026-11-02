@@ -79,12 +79,12 @@ p = gcp('nocreate');
 if nWorkers > 1
     if isempty(p) || ~isa(p, 'parallel.ProcessPool') || p.NumWorkers ~= nWorkers
         delete(gcp('nocreate'));
-        parpool('processes', nWorkers);
-    else
-        % Reusing a pool that may predate the current code: workers cache
-        % compiled functions and would otherwise run stale GIAnT code.
-        refreshPoolWorkerCode(p);
+        p = parpool('processes', nWorkers);
     end
+    % Workers must resolve GIAnT functions from THIS checkout and must not
+    % keep compiled copies from before the current code was pulled. Neither
+    % is guaranteed by a reused (or even a fresh) process pool.
+    refreshPoolWorkerCode(p, fileparts(fileparts(mfilename('fullpath'))));
 else
     % A previously opened process pool still consumes RAM even though the
     % sequential branch below would not use it.
