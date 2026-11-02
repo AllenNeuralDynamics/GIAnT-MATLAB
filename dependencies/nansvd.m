@@ -45,10 +45,14 @@ for iter = 1:maxIter
     end
 end
 
+%svds returns fewer components when D has rank < numComps (e.g. few valid
+%pixels); pad so outputs always have numComps components
+nFound = size(U,2);
 Uout = nan(length(selRows),numComps);
-Uout(selRows,:) = U;
+Uout(selRows,1:nFound) = U;
 Vout = nan(length(selCols), numComps);
-Vout(selCols,:) = V;
+Vout(selCols,1:nFound) = V;
+S(numComps,numComps) = 0;
 BG = nan(length(selRows),length(selCols));
 BG(selRows,selCols) = bg;
 end

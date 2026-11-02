@@ -1,5 +1,8 @@
-function  [IM, meanIM, IMc, aData, peaks, discardFrames]= loadAndProcessTrialAsync(mocoDr, fn, numChannels, params)
+function  [IM, meanIM, IMc, aData, peaks, discardFrames, actAcc, halfIMs]= loadAndProcessTrialAsync(mocoDr, fn, numChannels, params)
 % mocoDr: directory with motion-corrected outputs (downsampled registered TIFF/H5 and *_ALIGNMENTDATA.h5).
+% halfIMs: rows x cols x channels x 2, the mean image of two independent
+% halves of the frames (alternating 0.5 s blocks), for the reliability of the
+% across-trial alignment (alignTrialsPatchwise).
     if endsWith(fn, '.h5')
         desc = h5info([mocoDr filesep fn]);
         IM = h5read([mocoDr filesep fn], ['/', desc.Datasets.Name]);
@@ -11,6 +14,27 @@ function  [IM, meanIM, IMc, aData, peaks, discardFrames]= loadAndProcessTrialAsy
     meanIM= mean(IM,4, 'omitnan');
     nanPx = repmat(mean(isnan(IM), [3 4])>params.nanThresh, 1,1,size(IM,3));
     meanIM(nanPx) = nan;
+
+    %halves from alternating blocks rather than alternating frames, because
+    %neighbouring downsampled frames share noise; summed frame by frame to
+    %avoid copying the movie
+    blockLen = max(1, round(0.5*params.alignHz));
+    half = mod(floor((0:size(IM,4)-1)/blockLen), 2) + 1;
+    halfIMs = nan([size(meanIM, [1 2 3]) 2], 'like', meanIM);
+    for h = 1:2
+        frames = find(half == h);
+        s = zeros(size(meanIM, [1 2 3])); n = zeros(size(meanIM, [1 2 3]));
+        for f = frames
+            x = double(IM(:,:,:,f));
+            ok = ~isnan(x);
+            x(~ok) = 0;
+            s = s + x;
+            n = n + ok;
+        end
+        m = s ./ n;
+        m(repmat(1 - mean(n, 3)/numel(frames) > params.nanThresh, 1, 1, size(IM,3))) = nan;
+        halfIMs(:,:,:,h) = m;
+    end
 
     IM = squeeze(IM(:,:,params.activityChannel,:));
 
@@ -38,10 +62,10 @@ function  [IM, meanIM, IMc, aData, peaks, discardFrames]= loadAndProcessTrialAsy
     end
 
     try
-       [IMc, peaks] = localizeSources_vIM(IM, vIM, params);
+       [IMc, peaks, actAcc] = localizeSources_vIM(IM, vIM, params);
     catch ME
         IM([1 end],:,:) = nan;
         IM(:,[1 end],:) = nan;
-        [IMc, peaks] = localizeSources_vIM(IM, vIM, params);
+        [IMc, peaks, actAcc] = localizeSources_vIM(IM, vIM, params);
     end
 end

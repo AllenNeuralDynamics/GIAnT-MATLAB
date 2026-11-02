@@ -19,8 +19,11 @@ switch fnName
         params.tau_s = 0.024;            tooltips.tau_s = 'decay time constant of glutamate signal';
         params.tau2_s = 0.15;            tooltips.tau2_s = 'decay time constant of 2nd channel signal at synapses (usually spine calcium)';
         params.VIF = 1.67;                  tooltips.VIF = 'variance inflation factor for stdIM estimate';
+        params.peakMethod = 'getActImPeaks'; tooltips.peakMethod = 'how sources are seeded: ''getActImPeaks'' (maxima of the accumulated activity image above peakth, fit with Gaussians) or ''wmf'' (whitened matched filter of the trials'' aligned activity images; two sources are kept apart only where resolved reproducibly across halves of the trials; see findSourcesWMF)';
         params.peakth = 8;              tooltips.peakth = 'peak identification threshold (actIM z-score)';
         params.minPeakDistance = 1;     tooltips.minPeakDistance = 'minimum Chebyshev distance between peaks (pixels); 1 = adjacent peaks allowed';
+        params.wmfPeakth = 5;           tooltips.wmfPeakth = 'peakMethod ''wmf'': detection threshold (z-score of the whitened matched filter image)';
+        params.wmfDip = 3;              tooltips.wmfDip = 'peakMethod ''wmf'': dip (z units) the filtered image must show between two nearby maxima to keep them as two sources (and dip/sqrt(2) in each half of the trials)';
         params.nWorkers = 12;           tooltips.nWorkers = 'number of parallel workers';
         params.drawUserRois = true;     tooltips.drawUserRois = 'use user ROIs (annotations.h5, else post-acquisition annotations, else draw them)?';
         params.allowAnnotationGUI = true; tooltips.allowAnnotationGUI = 'open the ROI GUI for paths without usable annotations? Never opens in -batch/-nodisplay sessions; such paths are processed without user ROIs';
@@ -28,6 +31,10 @@ switch fnName
         params.analyzeHz = 200;          tooltips.analyzeHz = 'frame rate used for analysis (SLAP2 only)';
         params.nanThresh = 0.33;         tooltips.nanThresh = 'Max fraction of samples that can be NaN for including a pixel in analysis';
         params.discardInitial_s = 0;     tooltips.discardInitial_s = 'time in seconds to remove from analysis at the start of each trial, to account for warmup';
+        params.F0imTrim_s = 1;        tooltips.F0imTrim_s = 'seconds left out at the start and end of each trial when averaging per-trial F0 images, where the baseline fit is biased (GitHub issue #17)';
+        params.interTrialAlignment = 'patchwise'; tooltips.interTrialAlignment = 'how trials are aligned to each other: ''patchwise'' (a smooth displacement field set by patches of imaged pixels; corrects affine and local deformations between trial mean images), ''affine'' (one affine map per trial) or ''rigid'' (one shift per trial)';
+        params.saveSubdir = 'source_extraction'; tooltips.saveSubdir = 'folder, under the trial table''s save folder, that SILo writes its summaries to';
+        params.alignPatchPx = 1500;     tooltips.alignPatchPx = 'imaged pixels per patch for patchwise across-trial alignment (patches under half this are merged into neighbours); large enough that no single spine drives a patch, so the field cannot stretch or shrink individual spines';
     case 'MultiRoiRegistration'
         params.alignHz = 80; tooltips.alignHz = 'Frequency for generating downsampled aligned tiffs';
         params.maxshift = 40; tooltips.maxshift = 'Maximum frame offset,in pixels';

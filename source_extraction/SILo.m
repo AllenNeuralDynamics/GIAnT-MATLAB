@@ -10,6 +10,14 @@ else
 end
 % Fixed values; user/GUI/JSON cannot override these in SILo
 params.minBaseline = 0.01;
+params.interTrialAlignment = lower(char(params.interTrialAlignment));
+if ~any(strcmp(params.interTrialAlignment, {'patchwise', 'affine', 'rigid'}))
+    error('SILo:interTrialAlignment', 'params.interTrialAlignment must be ''patchwise'', ''affine'' or ''rigid'', not ''%s''.', params.interTrialAlignment);
+end
+params.peakMethod = lower(char(params.peakMethod));
+if ~any(strcmp(params.peakMethod, {'getactimpeaks', 'wmf'}))
+    error('SILo:peakMethod', 'params.peakMethod must be ''getActImPeaks'' or ''wmf'', not ''%s''.', params.peakMethod);
+end
 if ~nargin
     if ~isInteractiveSession()
         error('SILo:NonInteractive', 'No interactive display: pass the trial_table.h5 path (or its folder) to SILo.');
@@ -41,7 +49,7 @@ end
 disp(['## SUMMARIZING' newline 'Folder:'])
 disp(dr)
 
-savedr = fullfile(trialTable.savedr, 'source_extraction');
+savedr = fullfile(trialTable.savedr, params.saveSubdir);
 
 if ~exist(savedr, 'dir')
     mkdir(savedr);
@@ -74,6 +82,8 @@ for DMDix = nDMDs:-1:1
         exptSummary.perTrialActIms{DMDix} = [];
         exptSummary.perTrialActIMsAligned{DMDix} = [];
         exptSummary.perTrialAlignmentOffsets{DMDix} = [];
+        exptSummary.perTrialAlignmentTforms{DMDix} = [];
+        exptSummary.perTrialAlignmentWarp{DMDix} = [];
         continue
     end
 
@@ -143,21 +153,30 @@ for DMDix = nDMDs:-1:1
 
     %Perform Localizations
     disp('Loading data and performing localizations...')
-    mIM = cell(1, nTrials); aIM = cell(1,nTrials); alignData = cell(1, nTrials); peaks = cell(1, nTrials); discardFrames = cell(1,nTrials);
+    mIM = cell(1, nTrials); aIM = cell(1,nTrials); alignData = cell(1, nTrials); peaks = cell(1, nTrials); discardFrames = cell(1,nTrials); actAcc = cell(1,nTrials); hIM = cell(1,nTrials);
     fns = trialTable.motion_correction.fn_reg_ds(DMDix, :);
     parfor trialIx = 1:nTrials
         if keepTrials(DMDix,trialIx)
-            [~, mIM{trialIx}, aIM{trialIx}, alignData{trialIx}, peaks{trialIx}, discardFrames{trialIx}]= loadAndProcessTrialAsync(mocodr, fns{trialIx}, numChannels, params);
+            [~, mIM{trialIx}, aIM{trialIx}, alignData{trialIx}, peaks{trialIx}, discardFrames{trialIx}, actAcc{trialIx}, hIM{trialIx}]= loadAndProcessTrialAsync(mocodr, fns{trialIx}, numChannels, params);
         end
     end
     %Assemble same-sized mean images from different-sized trial means
     szm1 = max(cellfun(@(x)size(x,1),mIM)); szm2 = max(cellfun(@(x)size(x,2), aIM));
     meanIM = nan(szm1,szm2,numChannels, nTrials); activIM = nan(szm1,szm2,1, nTrials);
+    halfIM = nan(szm1,szm2,numChannels,2, nTrials); %two independent halves of each trial's mean
+    actNumIM = zeros(szm1,szm2,nTrials); actCountIM = zeros(szm1,szm2,nTrials); %activity image sums, 0 where unobserved
     for trialIx = 1:nTrials
         tmp =  mIM{trialIx};
         meanIM(1:size(tmp,1),1:size(tmp,2),:,trialIx) = tmp;
+        if ~isempty(hIM{trialIx})
+            halfIM(1:size(tmp,1),1:size(tmp,2),:,:,trialIx) = hIM{trialIx};
+        end
         tmp =  aIM{trialIx};
         activIM(1:size(tmp,1),1:size(tmp,2),:,trialIx) = tmp;
+        if ~isempty(actAcc{trialIx})
+            actNumIM(1:size(tmp,1),1:size(tmp,2),trialIx) = actAcc{trialIx}.num;
+            actCountIM(1:size(tmp,1),1:size(tmp,2),trialIx) = actAcc{trialIx}.count;
+        end
     end
 
     %Make template
@@ -167,10 +186,9 @@ for DMDix = nDMDs:-1:1
     samples = find(keepTrials(DMDix,:)); samples = samples(unique(round(linspace(1,length(samples),20))));
     template = makeConsensusTemplate(M(:,:,samples), maxshift);
 
-    %align all mean images to template
+    %align all mean images to template: a rigid shift per trial, optionally
+    %refined to a patchwise field or an affine map below
     disp('Aligning across trials...')
-    meanAligned = [];
-    actAligned = nan(size(meanIM,1), size(meanIM,2),1,nTrials);
     corrCoeff = nan(1,nTrials);
     motOutput = nan(2,nTrials);
     Mpad = nan([size(template) size(M,3)]);
@@ -184,29 +202,88 @@ for DMDix = nDMDs:-1:1
             continue
         end
         disp(['trial: ' int2str(trialIx)])
-        
+
         output1 = dftregistration_clipped(tFFT, fft2(max(Mpad(:,:,trialIx), fillval)),1,80);
         mot1 = [-output1(3) -output1(4)];
         [motOutput(:,trialIx), corrCoeff(trialIx)] = xcorr2_nans(Mpad(:,:,trialIx), template, round(mot1'), maxshift);
-        [rr,cc] = ndgrid(1:size(meanIM,1), 1:size(meanIM,2));
-
-        for chIx = 1:size(meanIM,3)
-            meanAligned(:,:,chIx,trialIx) = interp2(meanIM(:,:,chIx,trialIx), cc+motOutput(2,trialIx), rr+motOutput(1,trialIx));
-        end
-        actAligned(:,:,1,trialIx) = interp2(activIM(:,:,1,trialIx), cc+motOutput(2,trialIx), rr+motOutput(1,trialIx));
+    end
+    %transforms from the common frame [row; col; 1] to each trial's image [row; col]
+    alignedTrials = find(~isnan(motOutput(1,:)));
+    tforms = nan(2,3,nTrials);
+    for trialIx = alignedTrials
+        tforms(:,:,trialIx) = [1 0 motOutput(1,trialIx); 0 1 motOutput(2,trialIx)];
     end
 
     %identify outliers in alignment quality to determine valid trials
     corrThresh = min(0.90, median(corrCoeff, 'omitnan')-2*std(corrCoeff, 'omitmissing'));
-    actValidPix = squeeze(mean(~isnan(actAligned(:,:,1,:)), [1 2]));
+    actValidPix = squeeze(mean(~isnan(activIM(:,:,1,:)), [1 2]));
     validTrials= find(corrCoeff(:)>corrThresh & actValidPix(:)>mean(actValidPix)/2);
+
+    %trial mean images differ by small deformations that track motion (up to
+    %~1 px at the edges of the field, and local bends of a few tenths of a
+    %pixel), which a single shift per trial leaves in place; refine the valid
+    %trials' alignment groupwise. warp holds every trial's map from the common
+    %frame to its image (see trialWarpCoords); trials that are aligned but not
+    %valid keep their rigid shift
+    warp = struct('affine', tforms, 'nodes', zeros(0,2), 'sigma', nan, 'disp', zeros(2,0,nTrials), 'patch', []);
+    if ~strcmpi(params.interTrialAlignment, 'rigid') && numel(validTrials) > 1
+        tformsValid = nan(size(tforms));
+        tformsValid(:,:,validTrials) = tforms(:,:,validTrials);
+        if strcmpi(params.interTrialAlignment, 'patchwise')
+            disp('Refining across-trial alignment to patchwise displacement fields...')
+            Mhalves = permute(reshape(sum(halfIM, 3), szm1, szm2, 2, nTrials), [1 2 4 3]); %rows x cols x trials x 2, channels summed as in M
+            [pw, pwInfo] = alignTrialsPatchwise(M, tformsValid, Mhalves, params.alignPatchPx);
+            clear Mhalves
+            warp.nodes = pw.nodes; warp.sigma = pw.sigma; warp.patch = pw.patch;
+            warp.disp = nan(2, size(pw.nodes,1), nTrials);
+            for trialIx = alignedTrials
+                warp.disp(:,:,trialIx) = tforms(:,1:2,trialIx)*pw.nodes' + tforms(:,3,trialIx) - pw.nodes';
+            end
+            warp.disp(:,:,validTrials) = pw.disp(:,:,validTrials);
+            warp.affine(:,:,validTrials) = pw.affine(:,:,validTrials);
+            disp(['  ' int2str(size(pw.nodes,1)) ' patches of ' int2str(min(pwInfo.nPx)) '-' int2str(max(pwInfo.nPx)) ...
+                ' px; median reliability weight ' num2str(median(pwInfo.weight), 2)]);
+            disp(['  RMS change from rigid alignment per valid trial (px): ' mat2str(round(pwInfo.rmsDisp(validTrials), 2))]);
+        else
+            disp('Refining across-trial alignment to affine maps...')
+            [tformsValid, affInfo] = alignTrialsAffine(M, tformsValid);
+            warp.affine(:,:,validTrials) = tformsValid(:,:,validTrials);
+            disp(['  RMS change from rigid alignment per valid trial (px): ' mat2str(round(affInfo.rmsDisp(validTrials), 2))]);
+        end
+    end
+    clear halfIM hIM
+    %rigid-equivalent offsets (the displacement at the image centre), used for per-frame motion records
+    x0 = [(szm1+1)/2; (szm2+1)/2];
+    for trialIx = alignedTrials
+        [rC, cC] = trialWarpCoords(warp, trialIx, x0(1), x0(2));
+        motOutput(:,trialIx) = [rC; cC] - x0;
+    end
+
+    %warp per-trial images into the common frame
+    meanAligned = nan(size(meanIM));
+    actAligned = nan(size(meanIM,1), size(meanIM,2),1,nTrials);
+    for trialIx = alignedTrials
+        meanAligned(:,:,:,trialIx) = warpTrialImage(meanIM(:,:,:,trialIx), warp, trialIx, 'cubic');
+        actAligned(:,:,1,trialIx) = warpTrialImage(activIM(:,:,1,trialIx), warp, trialIx, 'linear');
+    end
     exptSummary.meanIM{DMDix} = mean(meanAligned(:,:,:,validTrials),4, 'omitnan');
 
-    %select sources on aligned activity image
-    actIM = mean(actAligned(:,:,:,validTrials), 4, 'includenan');
+    %select sources on the aligned activity image, accumulated over trials in
+    %the common frame: sums of local-maximum scores over sums of observations,
+    %so pixels observed in only some frames or trials are weighted accordingly
+    actNum = zeros(szm1, szm2); actCount = zeros(szm1, szm2); actReg = 0; nScored = 0;
+    for trialIx = validTrials(:)'
+        num = warpTrialImage(actNumIM(:,:,trialIx), warp, trialIx, 'linear');
+        cnt = warpTrialImage(actCountIM(:,:,trialIx), warp, trialIx, 'linear');
+        num(isnan(num)) = 0; cnt(isnan(cnt)) = 0;
+        actNum = actNum + num;
+        actCount = actCount + cnt;
+        actReg = actReg + actAcc{trialIx}.reg;
+        nScored = nScored + actAcc{trialIx}.nFrames;
+    end
+    actIM = actNum ./ (actReg + actCount);
     actIM = actIM ./ 10^(floor(log10(max(actIM(:))))-1);
-    nanFrac = mean(isnan(actAligned(:,:,:,validTrials)), 4);
-    actIM(nanFrac>params.nanThresh) = nan;
+    actIM(actCount < (1-params.nanThresh)*nScored) = nan; %observed in too few of the scored frames
     medIM = nanmedfilt2(actIM, 5.*[1 1]);
     actIM = actIM-medIM; %subtract a local baseline
     exptSummary.actIM{DMDix} = actIM;
@@ -223,7 +300,14 @@ for DMDix = nDMDs:-1:1
         end
     end
 
-    thetaf = getActImPeaks(actIM,params.peakth,somaMask,params.minPeakDistance);
+    if strcmp(params.peakMethod, 'wmf')
+        %seeds from the trials' aligned activity images rather than the accumulated act_im
+        [seedRC, seedInfo] = findSourcesWMF(reshape(actAligned(:,:,1,validTrials), sz(1), sz(2), []), params);
+        inSoma = somaMask(sub2ind(sz, round(seedRC(:,1)), round(seedRC(:,2))));
+        thetaf = [seedInfo.value(~inSoma), seedRC(~inSoma,:)];
+    else
+        thetaf = getActImPeaks(actIM,params.peakth,somaMask,params.minPeakDistance);
+    end
 
     sources = struct('R', [], 'C', [], 'V', []);
     totalPix = sum(~isnan(actIM(:)) & ~somaMask(:));
@@ -285,11 +369,11 @@ for DMDix = nDMDs:-1:1
             end
             fls = trialTable.slap2_info.first_line(DMDix,:);
             els = trialTable.slap2_info.last_line(DMDix,:);
-            E = processAllTrials_Async(trialDataDr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, motOutput, roiData, validTrials, params);
+            E = processAllTrials_Async(trialDataDr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, params);
         else % non-SLAP2 (registered movies live under motion_correction)
             fls = cell(1,numel(fns));
             els = cell(1,numel(fns));
-            E = processAllTrials_Async(mocodr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, motOutput, roiData, validTrials, params);
+            E = processAllTrials_Async(mocodr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, params);
         end
         exptSummary.E(:,DMDix) = E;
     end
@@ -303,8 +387,10 @@ for DMDix = nDMDs:-1:1
     exptSummary.perTrialActIms{DMDix} = actIM;
     exptSummary.perTrialActIMsAligned{DMDix} = actAligned;
     exptSummary.perTrialAlignmentOffsets{DMDix} = motOutput;
+    exptSummary.perTrialAlignmentTforms{DMDix} = warp.affine;
+    exptSummary.perTrialAlignmentWarp{DMDix} = warp;
 
-    clear meanAligned meanIM actAligned E
+    clear meanAligned meanIM actAligned actNumIM actCountIM E
 end
 
 % Shut down the parallel pool explicitly so thread-pool arrays are

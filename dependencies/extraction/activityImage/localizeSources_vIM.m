@@ -1,7 +1,12 @@
-function [skIm, P] = localizeSources_vIM(IM, vIM, params, doPlot)
+function [skIm, P, acc] = localizeSources_vIM(IM, vIM, params, doPlot)
 %inputs:
 %IM:        3D recording, X x Y x Time
 %aData:     alignment metadata
+%outputs:
+%skIm:      activity image (sum of squared local-maximum scores / (reg + observations))
+%P:         peaks of the activity image
+%acc:       the parts of skIm (num, count, reg) and the number of frames
+%           scored (nFrames), for accumulating across trials
 nTimePoints = size(IM,3);
 tau = params.tau_s.*params.alignHz; %time constant in frames
 params.tau_frames = tau;
@@ -16,6 +21,7 @@ if ~any(valid)
     warning('Recording had no valid pixels; likely too much motion')
     P = [];
     skIm = nan(sz(1:2));
+    acc = struct('num', zeros(sz(1:2)), 'count', zeros(sz(1:2)), 'reg', 300, 'nFrames', 0);
     return
 end
 if nargin<4
@@ -81,27 +87,80 @@ for t = size(IMf,3):-1:1
 end
 IMf(nans) = nan;
 
-%Difference of Gaussians
-IMf(nans) = 0;
-IMf = imgaussfilt(IMf, [sigma sigma]);
-IMf = IMf - imgaussfilt(IMf, 5*[sigma sigma]);
+%Difference of Gaussians, normalized over observed pixels: near unscanned
+%(NaN) pixels the kernels renormalize instead of averaging in zeros, which
+%would attenuate and displace edge pixels by an amount that changes with the
+%frame-to-frame NaN pattern. Averaging fewer pixels leaves more noise, so the
+%result is divided by its expected noise SD relative to fully observed pixels,
+%sqrt(sum(k.^2.*W)/sum(k.*W).^2 / sum(k.^2)) for the center kernel k.
+%Identical to plain filtering where all pixels are observed.
+chunk = 100; %frames per chunk, to bound memory
+for t0 = 1:chunk:nTimePoints
+    ix = t0:min(nTimePoints, t0+chunk-1);
+    W = single(~nans(:,:,ix));
+    X = IMf(:,:,ix); X(nans(:,:,ix)) = 0;
+    Wc = imgaussfilt(W, [sigma sigma]);
+    G1 = imgaussfilt(X, [sigma sigma]) ./ Wc;
+    G1(nans(:,:,ix)) = 0;
+    G2 = imgaussfilt(G1, 5*[sigma sigma]) ./ imgaussfilt(W, 5*[sigma sigma]);
+    noiseSD = sqrt(imgaussfilt(W, [sigma sigma]/sqrt(2)) ./ Wc.^2); %k.^2 is a Gaussian of width sigma/sqrt(2)
+    IMf(:,:,ix) = (G1 - G2) ./ noiseSD;
+end
+clear W X Wc G1 G2 noiseSD
 IMf(nans) = nan;
 
-%nonmax suppression- find maxima
-skIm = zeros(sz(1:2));
+%nonmax suppression- find maxima. Unobserved pixels are -Inf here so they
+%cannot veto a neighbouring or adjacent-frame maximum (NaN would).
+%Scores are kept separately by the number of observed neighbours (0-8),
+%see below.
+nPx = prod(sz(1:2));
+nbKernel = ones(3); nbKernel(2,2) = 0;
+skByNb = zeros([sz(1:2) 9]); obsByNb = zeros([sz(1:2) 9]);
 for fr = size(IMf,3)-ceil(1.5*tau):-1:2 %ceil(tau) because the filtering is uncertain in the final frames
-    
+
     IMfr = IMf(:,:,fr); IMpre = IMf(:,:,fr-1); IMpost = IMf(:,:,fr+1);
-    
+    obs = ~isnan(IMfr);
+    IMfr(~obs) = -inf; IMpre(isnan(IMpre)) = -inf; IMpost(isnan(IMpost)) = -inf;
+
     selMax = IMfr==ordfilt2(IMfr,9, ones(3));
-    IMlocalMax(:,:,fr) = selMax & IMfr>IMpre & IMfr>=IMpost;
+    localMax = selMax & IMfr>IMpre & IMfr>=IMpost;
     %maxinds = find(IMfr==ordfilt2(IMfr,9, ones(3)));
     % sel = IMfr(maxinds)>0 & IMpre(maxinds)<=IMfr(maxinds) & IMpost(maxinds)<=IMfr(maxinds);
     % %sel = IMpre(maxinds)<=IMfr(maxinds) & IMpost(maxinds)<=IMfr(maxinds);
     % maxinds = maxinds(sel);
-    skIm(IMlocalMax(:,:,fr)) = skIm(IMlocalMax(:,:,fr)) + IMfr(IMlocalMax(:,:,fr)).^2; 
+    nb = conv2(double(obs), nbKernel, 'same'); %observed neighbours
+    ix = find(obs);
+    ixNb = ix + nb(ix)*nPx;
+    obsByNb(ixNb) = obsByNb(ixNb) + 1;
+    ix = find(localMax);
+    ixNb = ix + nb(ix)*nPx;
+    skByNb(ixNb) = skByNb(ixNb) + IMfr(ix).^2;
 end
-skIm = skIm./(300+sum(~nans(:,:,2:end-ceil(1.5*tau)),3)); %normalize to # observations w regularizer
+%A pixel with unobserved neighbours (at the edge of the scanned region) has
+%fewer neighbours to beat, so it is scored as a maximum more often, which
+%raises its background level and lowers that of the pixels inside it. Scale
+%each neighbour-count class so that its typical (median over pixels) score
+%per observation matches that of fully surrounded pixels; sparse synapses
+%hardly move these medians, and signal and background are scaled alike.
+classLevel = nan(1,9);
+for k = 1:9
+    o = obsByNb(:,:,k); s = skByNb(:,:,k);
+    enough = o >= 200;
+    if nnz(enough) >= 30
+        classLevel(k) = median(s(enough)./o(enough));
+    end
+end
+gain = classLevel(9)./classLevel;
+gain(~isfinite(gain)) = 1;
+skIm = sum(skByNb .* reshape(gain, 1, 1, 9), 3);
+nObs = sum(obsByNb, 3);
+clear skByNb obsByNb
+%unnormalized sums, so images can be accumulated across trials weighted by observations
+acc.num = skIm;
+acc.count = nObs;
+acc.reg = 300;
+acc.nFrames = numel(2:size(IMf,3)-ceil(1.5*tau));
+skIm = skIm./(acc.reg+nObs); %normalize to # observations w regularizer
 clear nans
 
 %summary = skewness(IMf(:,:, 1:end-3*ceil(tau)), 1,3); %.*IMgamma; 

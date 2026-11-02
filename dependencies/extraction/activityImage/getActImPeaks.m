@@ -19,6 +19,7 @@ peak_thresh = mu_bg + peakth * sigma_bg;
 opts = optimset('MaxFunEvals',5000,'Display','off');
 
 explored = actIM .* ~exclusionMask;
+explored(isnan(explored)) = -inf; %ordfilt2 returns NaN for any window touching a NaN, which would rule out peaks next to unscanned pixels
 pTmp = ordfilt2(explored, 8, ones(3)) > peak_thresh & ...
        explored == ordfilt2(explored, 9, ones(3));
 thetaf = zeros(0,4);

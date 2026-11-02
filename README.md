@@ -227,6 +227,7 @@ The final step of the pipeline, source extraction (Source Identification by Acti
     |  └ 📈 F (rois x channels x total frames)
     ├ 📁 visualizations
     |  ├ 🖼️ mean_im (channels x fastz x rows x cols)
+    |  ├ 🖼️ F0_im (channels x fastz x rows x cols)
     |  ├ 🖼️ act_im (fastz x rows x cols)
     |  └ 🖼️ act_im_peaks (sources x 3 [z_loc, y_loc, x_loc])
     ├ 📁 global
@@ -240,7 +241,9 @@ The final step of the pipeline, source extraction (Source Identification by Acti
        ├ 📈 onlineZshifts (total frames x 1)
        ├ 🔢 trial_num_frames (trials x 1)
        ├ 🔢 frame_line_idxs (total frames x 1)
-       └ ☑️ discard_frames (total frames x 1)
+       ├ ☑️ discard_frames (total frames x 1)
+       ├ 📈 trial_alignment_affine (trials x 2 x 3)
+       └ 📈 trial_alignment_displacement (trials x 2 x rows x cols)
 ```
 
 A summary file of per-trial data is also saved as `per_trial_summary.h5` for any fields that may vary across analysis trials. The structure of that file is as follows
@@ -255,8 +258,12 @@ A summary file of per-trial data is also saved as `per_trial_summary.h5` for any
     |  └ 📁 spatial
     |     ├ 🖼️ per_trial_profiles (trials x sources x fastz x rows x cols)
     |     └ 📈 per_trial_coords (trials x sources x 3 [z_loc, y_loc, x_loc])
+    ├ 📁 user_rois
+    |  ├ 📈 per_trial_F0 (rois x channels x trials)
+    |  └ 📈 per_trial_F0_coverage (rois x trials)
     └ 📁 visualizations
        ├ 🖼️ per_trial_mean_im (trials x channels x fastz x rows x cols)
+       ├ 🖼️ per_trial_F0_im (trials x channels x fastz x rows x cols)
        ├ 🖼️ per_trial_act_im (trials x fastz x rows x cols)
        ├ 🖼️ per_trial_act_im_peaks (trials x max_peaks x 3 [z_loc, y_loc, x_loc])
        └ 🔢 per_trial_num_peaks (trials x 1)
@@ -418,9 +425,12 @@ String fields are stored as UTF-16 code units (`uint16`) for robust MATLAB/Pytho
 | `Path{n}/frame_info/trial_num_frames` | trials x 1 | integer | Number of frames contributed by each analysis trial |
 | `Path{n}/frame_info/frame_line_idxs` | total frames x 1 | integer | Raw line (SLAP2) or frame (other microscopes) index for each frame in the stitched series. **1-indexed** to keep SLAP2 line indexing convention |
 | `Path{n}/frame_info/discard_frames` | total frames x 1 | bool or uint8 | Frame excluded from analysis (e.g., motion censoring) |
+| `Path{n}/frame_info/trial_alignment_affine` | trials x 2 x 3 | numeric | Per-trial affine map `A` from the common (across-trial aligned) frame to that trial's registered image, in **0-indexed** pixels: `[row; col]_trial = A(:, 1:2) * [row; col] + A(:, 3)`. With patchwise alignment this is only the plane (affine) part of the map; the full map is `trial_alignment_displacement`. NaN for trials that were not aligned. See [Aligning trials](#aligning-trials) |
+| `Path{n}/frame_info/trial_alignment_displacement` | trials x 2 x rows x cols | numeric | Per-trial map from the common frame to that trial's registered image as a displacement field: common-frame pixel `[row; col]` is read from the trial's image at `[row; col] + displacement(trial, :, row, col)` (the same in 0- and 1-indexed pixels). NaN for trials that were not aligned. See [Aligning trials](#aligning-trials) |
 | `Path{n}/visualizations` | — | group | Static images for QC and publication |
 | `Path{n}/visualizations/mean_im` | channels x fastz x rows x cols | numeric | Mean registered image per channel / Z slice |
-| `Path{n}/visualizations/act_im` | fastz x rows x cols | numeric | Activity / localization summary image (single contrast) |
+| `Path{n}/visualizations/F0_im` | channels x fastz x rows x cols | single | (when sources were extracted) Mean of `per_trial_F0_im` over trials with source extraction. See [Background (F0) images](#background-f0-images) |
+| `Path{n}/visualizations/act_im` | fastz x rows x cols | numeric | Activity / localization summary image (single contrast), accumulated over trials in the common frame. See [Aligning trials](#aligning-trials) |
 | `Path{n}/visualizations/act_im_peaks` | sources x 3 | numeric | Activity image peak locations used to seed matrix factorization `[z_loc, y_loc, x_loc]`, **0-indexed**; from `exptSummary.sources` row/column coordinates, `z_loc` fixed at `0` |
 | `Path{n}/global` | — | group | Whole-field signals |
 | `Path{n}/global/F` | channels x total frames | numeric | Fluorescence traces over the field (one column per channel) |
@@ -452,8 +462,9 @@ String fields are stored as UTF-16 code units (`uint16`) for robust MATLAB/Pytho
 | `Path{n}` | — | group | One group per imaging path |
 | `Path{n}/visualizations` | — | group | Per-trial static images for QC |
 | `Path{n}/visualizations/per_trial_mean_im` | trials x channels x fastz x rows x cols | numeric | Trial-aligned mean registered image per channel / Z slice |
+| `Path{n}/visualizations/per_trial_F0_im` | trials x channels x fastz x rows x cols | single | (when sources were extracted) Trial-aligned per-pixel background (F0) estimated by source extraction, averaged over the trial's kept frames, excluding `params.F0imTrim_s` seconds at each trial edge. See [Background (F0) images](#background-f0-images) |
 | `Path{n}/visualizations/per_trial_act_im` | trials x fastz x rows x cols | numeric | Trial-aligned activity / localization summary image |
-| `Path{n}/visualizations/per_trial_act_im_peaks` | trials x max_peaks x 3 | numeric | Per-trial detected peak locations `[z_loc, y_loc, x_loc]`, **0-indexed**, NaN-padded when a trial has fewer than `max_peaks`; from `exptSummary.peaks` with trial alignment offsets applied |
+| `Path{n}/visualizations/per_trial_act_im_peaks` | trials x max_peaks x 3 | numeric | Per-trial detected peak locations `[z_loc, y_loc, x_loc]`, **0-indexed**, NaN-padded when a trial has fewer than `max_peaks`; from `exptSummary.peaks`, mapped from each trial's registered image into the common frame (`frame_info/trial_alignment_displacement` in `experiment_summary.h5`) |
 | `Path{n}/visualizations/per_trial_num_peaks` | trials x 1 | integer | Number of valid peaks per trial; use to slice `per_trial_act_im_peaks` without scanning for NaNs |
 | `Path{n}/sources` | — | group | Per-trial SILo source data (when sources were extracted) |
 | `Path{n}/sources/spatial` | — | group | Per-trial spatial fingerprints and locations |
@@ -461,6 +472,33 @@ String fields are stored as UTF-16 code units (`uint16`) for robust MATLAB/Pytho
 | `Path{n}/sources/spatial/per_trial_coords` | trials x sources x 3 | numeric | Source centers per trial: `[z_loc, y_loc, x_loc]`, **0-indexed** (same convention as `experiment_summary.h5` `coords`) |
 | `Path{n}/sources/temporal` | — | group | Per-trial source metrics |
 | `Path{n}/sources/temporal/per_trial_SNR` | trials x sources | numeric | Per-source SNR for each analysis trial |
+| `Path{n}/user_rois` | — | group | (when user ROIs and F0 images both exist) Per-trial user ROI summaries |
+| `Path{n}/user_rois/per_trial_F0` | rois x channels x trials | numeric | Mean of `per_trial_F0_im` over each ROI mask, ignoring pixels without an F0 estimate. ROI order matches `experiment_summary.h5` `user_rois/labels` |
+| `Path{n}/user_rois/per_trial_F0_coverage` | rois x trials | numeric | Fraction of each ROI's mask pixels that have an F0 estimate in the activity channel. Low values mean `per_trial_F0` reflects only part of the ROI |
+
+#### Aligning trials
+
+Motion correction registers each trial's frames to that trial's own template, with one rigid shift per frame. SILo then brings all trials into one common frame before finding and extracting sources. Each trial's mean image is first aligned to a consensus template with a rigid shift. Trial mean images differ by small deformations that track motion: stretches of a few tenths of a pixel per 100 pixels (up to about a pixel at the edges of the field), and local bends of a few tenths of a pixel. A single shift per trial leaves these in place, so the valid trials are refined groupwise: the template is the mean of the trials warped into the common frame, each trial is refit to it, and the template is rebuilt, over a few rounds. The trials' mean deformation is removed, so the common frame keeps their average geometry.
+
+With `params.interTrialAlignment = 'patchwise'` (default), each trial's map is a smooth displacement field set by its values at the centres of patches of imaged pixels. The patches are k-means clusters of the coordinates of the pixels imaged in at least half the trials, with about `params.alignPatchPx` (default 1500) imaged pixels each, so every centre sits at the centre of mass of a compact set of imaged pixels; clusters with fewer than half that are merged into their neighbours. The default is large enough that no single spine dominates a patch (at 500 pixels a few patches per imaging path drew most of their alignment signal from one source), so the field cannot stretch or shrink an individual spine; the cost is less precise alignment of fine local deformations. Between centres, the field is the plane (affine) fit through all the centre displacements, plus a Gaussian-weighted blend of each centre's departure from that plane, so an affine deformation is reproduced exactly. All of a trial's centre displacements are fit jointly by robust Gauss-Newton, with a gain and offset per patch and robust weights so that a spine changing brightness does not pull the field. Each trial's two halves (alternating 0.5 s blocks of frames) are also fit separately; their disagreement gives the noise of each patch's departure from the plane, and departures are shrunk toward the plane by how far they stand above that noise. `'affine'` fits one affine map per trial, and `'rigid'` keeps one shift per trial.
+
+Everything per-trial is then in the common frame: `per_trial_mean_im`, `per_trial_act_im` and `per_trial_F0_im`, and the raw data that source extraction samples (each pixel is read at its trial's mapped position plus the frame's rigid motion). The maps are saved as `frame_info/trial_alignment_displacement`, with their affine (plane) part as `frame_info/trial_alignment_affine`. `frame_info/offline{X,Y}shifts` add each trial's displacement at the image centre to the per-frame motion.
+
+The activity image used to seed sources (`act_im`) is accumulated over trials in the common frame as sums of each pixel's local-maximum scores over sums of its observations, so a pixel observed in only some frames or trials is weighted by how often it was observed; it is kept if observed in at least `1 - nanThresh` of all scored frames. Within each trial, the edges of the scanned region (which move from frame to frame with motion) are handled so that pixels there are neither suppressed nor favored. The spatial filter renormalizes over observed pixels rather than treating unscanned (NaN) pixels as zeros, and its output is divided by its expected noise level, which is higher where fewer pixels were averaged. Unscanned neighbours do not prevent a pixel from counting as a local maximum, here or when picking peaks. Since a pixel with fewer observed neighbours wins local-maximum comparisons more often, scores are scaled by the number of observed neighbours so that the typical background level is the same as for fully surrounded pixels.
+
+`params.peakMethod` sets how sources are seeded. `'getActImPeaks'` (default) takes the maxima of `act_im` above `params.peakth` (robust z), fits them jointly with Gaussians, adds peaks where the residual still exceeds the threshold, and drops fitted peaks that are too small. Because the fit adds peaks wherever a blob is not Gaussian, it can split one elongated or large source into seeds at its edges, with none at its centre. `'wmf'` (`findSourcesWMF`) works from the trials' aligned activity images (`per_trial_act_im`). Each trial's image, minus its local median, is z-scored, and the trials' mean is z-scored again. This combined image is put through a whitened matched filter: the detection statistic for a source of the empirical shape (the average of patches around strong, isolated maxima) in noise of the empirical autocorrelation (measured away from activity; it carries the correlation of the noise along scan lines). Maxima above `params.wmfPeakth` are seeds. A seed within 6 px of a stronger one is merged into it unless the filtered image dips by `params.wmfDip` between them, both for all trials and for each half of the trials. Two sources are therefore kept apart only where they are resolved reproducibly. Each seed sits at the centroid of the combined image around its maximum, and must be active in at least 2 trials. On a 39-trial SLAP2 session, `'wmf'` left 1–2 pairs of seeds closer than 3 px per imaging path, against 27–45 for `'getActImPeaks'`. In cross-validation over halves of the trials, more seeds found on one half were found again on the other (128 vs 118 and 151 vs 104 per path). The seeds also sat closer to the other half's activity peaks (0.21–0.28 vs 0.40–0.41 px), and `'wmf'` found more seeds in total, the extras mostly weak.
+
+SILo writes its summaries to `params.saveSubdir` (default `source_extraction`) under the trial table's save folder, so runs with different parameters can sit side by side.
+
+User ROIs are drawn on, or registered to, the mean image of the longest valid trial in that trial's registered frame, not the common frame, so they can be offset from it by that trial's alignment (typically under a pixel).
+
+#### Background (F0) images
+
+`F0_im` and `per_trial_F0_im` are the per-pixel background (`B`) that source extraction fits alongside source activity, averaged over each trial's frames that are not in `discard_frames`. The first and last `params.F0imTrim_s` seconds of each trial (default 1) are left out, because the baseline fit is biased near trial edges ([#17](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB/issues/17)); a trial too short to trim is averaged whole. The per-frame `sources/temporal/F0` traces are not trimmed and still show this bias. Because glutamate transients are modeled separately, F0 approximates resting brightness. Unlike `mean_im`, it is not inflated at highly active synapses, so it is a better proxy for structure, e.g. spine size, tracked with a fixed ROI across trials (`user_rois/per_trial_F0`).
+
+- **Coverage.** F0 exists only within the source neighborhoods used for extraction (disks of radius `ceil(2*dXY)` around each detected source). Other pixels are NaN, so dendritic shafts and ROIs without a detected source may be partly or fully NaN. Check `per_trial_F0_coverage`.
+- **Channels.** Only analyzed channels are filled (the activity channel, and in two-channel recordings the next channel in `params.activityChannel` order); other channels are NaN. The second channel's background is the initial smooth baseline estimate and is not refined like the activity channel's.
+- **Units.** Movie fluorescence units, like `mean_im`. For non-SLAP2 data, a per-trial offset (5th percentile of the trial's median image) is subtracted before extraction, so absolute values can shift slightly between trials. Imaging conditions (laser power, depth, expression) also scale F0, so normalize, e.g. to a nearby dendrite or to `global/F`, before comparing across sessions.
 
 ## Citation
 

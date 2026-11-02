@@ -1,4 +1,6 @@
-function E = processAllTrials_Async(dr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, motOutput, roiData, validTrials, params)
+function E = processAllTrials_Async(dr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, params)
+%warp: the across-trial alignment from SILo, mapping the common (across-trial
+%aligned) frame to each trial's registered image (see trialWarpCoords)
 curPool = gcp('nocreate');
 if isempty(curPool) || ~strcmpi(class(curPool), 'parallel.ThreadPool') %  ~strcmpi(class(curPool), 'parallel.ProcessPool') %
     delete(curPool);
@@ -8,7 +10,7 @@ numDatasets = numel(fls);
 E = cell(numDatasets,1); 
 for i = 1:numel(validTrials)
     nLoad = validTrials(i);
-    CD = loadTrial(dr, fns{nLoad},fls(nLoad),els(nLoad),selPix,discardFrames{nLoad}, alignData{nLoad}, meanAligned(:,:,:,nLoad), motOutput(:,nLoad), roiData, params);
+    CD = loadTrial(dr, fns{nLoad},fls(nLoad),els(nLoad),selPix,discardFrames{nLoad}, alignData{nLoad}, meanAligned(:,:,:,nLoad), warp, nLoad, roiData, params);
     E{nLoad}.ROIs = CD.ROIs; E{nLoad}.global = CD.global;
     E{nLoad}.discardFrames = CD.discardFrames;
     E{nLoad}.frameLines = CD.frameLines;
@@ -65,6 +67,19 @@ try
 
     E.F0 = F0;
     E.SNR = SNR;
+
+    %per-pixel background averaged over kept frames (selected pixels x
+    %analyzed channels); a proxy for resting brightness, e.g. spine size.
+    %Frames near trial edges are left out, where the baseline fit is biased
+    %(GitHub issue #17); trials too short to trim are averaged whole.
+    keep = ~discard;
+    nTrim = round(params.F0imTrim_s * params.analyzeHz);
+    trimmed = keep;
+    trimmed([1:min(nTrim,end), max(1,end-nTrim+1):end]) = false;
+    if any(trimmed)
+        keep = trimmed;
+    end
+    E.F0im = single(reshape(mean(B(:,keep,:),2,'omitmissing'), size(B,1), size(B,3)));
 catch ME
     fprintf(2, 'processResult ERROR: %s\n', ME.message);
     fprintf(2, '%s\n', getReport(ME, 'extended', 'hyperlinks', 'off'));
@@ -72,7 +87,7 @@ catch ME
 end
 end
 
-function CD = loadTrial(dr, fn, startLine, endLine, selPix, discardFrames, alignData, meanIM, motOutput, roiData, params)
+function CD = loadTrial(dr, fn, startLine, endLine, selPix, discardFrames, alignData, meanIM, warp, trialIx, roiData, params)
 disp('Loading high-res data for file:')
 disp([dr filesep fn])
 
@@ -98,15 +113,21 @@ if params.isSLAP2
         CD.frameLines = frameLines;
         selPx2D = any(selPix,3);
 
-        %upsample motion
-        motionC = interp1(alignData.DSframes, alignData.motionDSc, frameLines, 'pchip', 'extrap') + motOutput(2);
-        motionR = interp1(alignData.DSframes, alignData.motionDSr, frameLines, 'pchip', 'extrap') + motOutput(1);
-        CD.motionC = motionC;
-        CD.motionR = motionR;
+        %upsample motion (within-trial, rigid)
+        motionC = interp1(alignData.DSframes, alignData.motionDSc, frameLines, 'pchip', 'extrap');
+        motionR = interp1(alignData.DSframes, alignData.motionDSr, frameLines, 'pchip', 'extrap');
 
         alignDataSlap2 = alignData.slap2;
         viewC = alignDataSlap2.viewC(1,:);
         viewR = alignDataSlap2.viewR(:,1);
+        assert(all(diff(viewC)==1) && all(diff(viewR)==1), 'loadTrial:view', 'expected unit-step viewC/viewR');
+
+        %record motion including the across-trial offset at the image centre
+        x0 = [(numel(viewR)+1)/2; (numel(viewC)+1)/2];
+        [rC, cC] = trialWarpCoords(warp, trialIx, x0(1), x0(2));
+        dCentre = [rC; cC] - x0;
+        CD.motionC = motionC + dCentre(2);
+        CD.motionR = motionR + dCentre(1);
 
         selPx2D = selPx2D(1:size(alignDataSlap2.viewC,1), 1:size(alignDataSlap2.viewC,2));
         nPx = numel(selPx2D);
@@ -116,6 +137,23 @@ if params.isSLAP2
         
         meanPx = reshape(meanIM, numel(labeled), numChannels);
         mLabeled = meanPx(labeled,:);
+
+        %pixels to sample: sources, labeled pixels (global activity) and user
+        %ROIs. A common-frame pixel sits at trialWarpCoords(warp, trialIx, row, col)
+        %in this trial's registered image, which is offset from the datafile by viewR/viewC.
+        need = selPx2D | labeled;
+        for rix = 1:length(roiData)
+            if numel(roiData{rix}.mask) == nPx
+                need = need | reshape(logical(roiData{rix}.mask), size(need));
+            else
+                need(:) = true;
+            end
+        end
+        q = find(need);
+        [rq, cq] = ind2sub(size(need), q);
+        [rT, cT] = trialWarpCoords(warp, trialIx, rq, cq);
+        rD = viewR(1) - 1 + rT;
+        cD = viewC(1) - 1 + cT;
 
         blocksize = 600; %number of frames to load at a time; 100 frames ~= 1GB RAM usage
         nBlocks = ceil(nFrames./blocksize);
@@ -131,14 +169,15 @@ if params.isSLAP2
             Fresh = Fresh(alignDataSlap2.trimRows, alignDataSlap2.trimCols,:);
             nFramesInBlock = size(Y,4);
 
-            Y2 = nan(length(viewR),length(viewC),numChannels, nFramesInBlock);
-            Finv = nan(length(viewR),length(viewC),nFramesInBlock);
+            Yq = nan(numel(q), numChannels, nFramesInBlock);
+            Fq = nan(numel(q), nFramesInBlock);
             parfor frIx = 1:nFramesInBlock
-                [Y2(:,:,:,frIx), Finv(:,:,frIx)] = interpFrames(Y(:,:,:,frIx),viewC+motionC(fIxs(frIx)), viewR+motionR(fIxs(frIx)), Fresh(:,:,frIx));
+                [Yq(:,:,frIx), Fq(:,frIx)] = interpFramesAt(Y(:,:,:,frIx), rD+motionR(fIxs(frIx)), cD+motionC(fIxs(frIx)), Fresh(:,:,frIx));
             end
-
-            Y2 = reshape(Y2, nPx, numChannels, nFramesInBlock);
-            Finv= reshape(Finv, nPx, nFramesInBlock);
+            Y2 = nan(nPx, numChannels, nFramesInBlock);
+            Finv = nan(nPx, nFramesInBlock);
+            Y2(q,:,:) = Yq;
+            Finv(q,:) = Fq;
 
             IMsel(:, :, fIxs) = Y2(selPx2D,:,:);
             Finvsel(:,fIxs) = Finv(selPx2D,:);
@@ -194,8 +233,10 @@ if params.isSLAP2
         CD.frameLines = 1:nFrames;
 
         %upsample motion
-        viewC = (1:size(IM,2)) + motOutput(2);
-        viewR = (1:size(IM,1))' + motOutput(1);
+        %position of every common-frame pixel in this trial's registered movie
+        [cg, rg] = meshgrid(1:size(IM,2), 1:size(IM,1));
+        [rq, cq] = trialWarpCoords(warp, trialIx, rg(:), cg(:));
+        clear cg rg
 
         CD.motionC = alignData.motionC;
         CD.motionR = alignData.motionR;
@@ -221,10 +262,12 @@ if params.isSLAP2
             
             Y = IM(:,:,:,fIxs); %reduce communication overhead to parallel workers
             nanMask = isnan(Y);
-            Y2 = nan(length(viewR),length(viewC),numChannels, nFramesInBlock);
-            Finv = nan(length(viewR),length(viewC),nFramesInBlock);
+            Y2 = nan(size(IM,1),size(IM,2),numChannels, nFramesInBlock);
+            Finv = nan(size(IM,1),size(IM,2),nFramesInBlock);
             parfor frIx = 1:nFramesInBlock
-                [Y2(:,:,:,frIx), Finv(:,:,frIx)] = interpFrames(Y(:,:,orderedChannels,frIx),viewC, viewR, Fresh);
+                [Yf, Ff] = interpFramesAt(Y(:,:,orderedChannels,frIx), rq, cq, Fresh);
+                Y2(:,:,:,frIx) = reshape(Yf, size(Fresh,1), size(Fresh,2), []);
+                Finv(:,:,frIx) = reshape(Ff, size(Fresh,1), size(Fresh,2));
             end
             Y2(nanMask) = nan;
 

@@ -6,9 +6,10 @@ function saveExperimentSummaryH5(filename, exptSummary, trialTable)
 %   documented in the README.md "Experiment Summary" section:
 %       /params
 %       /Path{n}/Z_depths
-%       /Path{n}/frame_info/{offline,online}{X,Y,Z}shifts,
+%       /Path{n}/frame_info/{offline,online}{X,Y,Z}shifts, trial_alignment_affine,
+%                          trial_alignment_displacement,
 %                          trial_num_frames, frame_line_idxs, discard_frames
-%       /Path{n}/visualizations/{mean_im, act_im, act_im_peaks}
+%       /Path{n}/visualizations/{mean_im, F0_im, act_im, act_im_peaks}
 %       /Path{n}/global/F
 %       /Path{n}/user_rois/{labels, mask, F, Fsvd}
 %       /Path{n}/sources/spatial/{profiles, coords}
@@ -79,7 +80,8 @@ end
 
 ps.frame_info = buildFrameInfo(exptSummary, DMDix, isSlap2, ...
     framesPerTrial, totalFrames, nTrials);
-ps.visualizations = buildVisualizations(exptSummary, DMDix);
+ps.visualizations = buildVisualizations(exptSummary, DMDix, nTrials, ...
+    numChannels, orderedChannels);
 ps.global = buildGlobal(exptSummary, DMDix, framesPerTrial, totalFrames, nTrials);
 ps.user_rois = buildUserRois(exptSummary, DMDix, framesPerTrial, totalFrames, ...
     nTrials, imRows, imCols, numChannels, orderedChannels);
@@ -203,10 +205,41 @@ if isSlap2
     fi.onlineYshifts = onlineY;
     fi.onlineZshifts = onlineZ;
 end
+
+% per-trial map from the common frame to each trial's registered image,
+% [row; col] = A(:,1:2)*[row; col] + A(:,3), converted to 0-indexed pixels
+if isfield(exptSummary, 'perTrialAlignmentTforms') && numel(exptSummary.perTrialAlignmentTforms) >= DMDix ...
+        && ~isempty(exptSummary.perTrialAlignmentTforms{DMDix})
+    A = exptSummary.perTrialAlignmentTforms{DMDix};
+    A0 = nan(2, 3, nTrials);
+    for tIx = 1:min(nTrials, size(A, 3))
+        A0(:, :, tIx) = [A(:, 1:2, tIx), A(:, 3, tIx) + A(:, 1:2, tIx)*[1; 1] - [1; 1]];
+    end
+    fi.trial_alignment_affine = permute(A0, [3 1 2]); % trials x 2 x 3
+end
+
+% the full map as a displacement field: common-frame pixel [row; col] is read
+% from the trial's registered image at [row; col] + displacement (the same in
+% 0- and 1-indexed pixels); the affine map above is its plane part
+if isfield(exptSummary, 'perTrialAlignmentWarp') && numel(exptSummary.perTrialAlignmentWarp) >= DMDix ...
+        && ~isempty(exptSummary.perTrialAlignmentWarp{DMDix}) && ~isempty(exptSummary.meanIM{DMDix})
+    warp = exptSummary.perTrialAlignmentWarp{DMDix};
+    H = size(exptSummary.meanIM{DMDix}, 1); W = size(exptSummary.meanIM{DMDix}, 2);
+    [cc, rr] = meshgrid(1:W, 1:H);
+    U = nan(nTrials, 2, H, W, 'single');
+    for tIx = 1:min(nTrials, size(warp.affine, 3))
+        if all(~isnan(warp.affine(:, :, tIx)), 'all')
+            [rT, cT] = trialWarpCoords(warp, tIx, rr, cc);
+            U(tIx, 1, :, :) = reshape(single(rT - rr), 1, 1, H, W);
+            U(tIx, 2, :, :) = reshape(single(cT - cc), 1, 1, H, W);
+        end
+    end
+    fi.trial_alignment_displacement = U; % trials x 2 x rows x cols
+end
 end
 
 
-function vis = buildVisualizations(exptSummary, DMDix)
+function vis = buildVisualizations(exptSummary, DMDix, nTrials, numChannels, orderedChannels)
 vis = struct();
 
 % rows x cols x channels -> channels x fastz(1) x rows x cols
@@ -214,6 +247,23 @@ mIm = exptSummary.meanIM{DMDix};
 H = size(mIm, 1); W = size(mIm, 2); C = size(mIm, 3);
 mIm3 = reshape(mIm, H, W, C);
 vis.mean_im = reshape(permute(mIm3, [3 1 2]), C, 1, H, W);
+
+% mean background (F0) over trials with source extraction; NaN outside the
+% source neighborhoods (selPix) and for un-analyzed channels
+selPix = exptSummary.selPix{DMDix};
+f0Stack = nan(size(selPix, 1), size(selPix, 2), numChannels, nTrials, 'single');
+hasF0 = false;
+for tIx = 1:nTrials
+    img = buildF0Image(exptSummary.E{tIx, DMDix}, selPix, numChannels, orderedChannels);
+    if ~isempty(img)
+        f0Stack(:, :, :, tIx) = img;
+        hasF0 = true;
+    end
+end
+if hasF0
+    f0Im = mean(f0Stack, 4, 'omitnan');
+    vis.F0_im = reshape(permute(f0Im, [3 1 2]), numChannels, 1, size(f0Im, 1), size(f0Im, 2));
+end
 
 % rows x cols x 1 -> fastz(1) x rows x cols
 aIm = exptSummary.actIM{DMDix};
