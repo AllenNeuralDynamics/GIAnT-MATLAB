@@ -1,0 +1,26 @@
+[
+  {
+    "asset_id": "1fa84619-ad5c-46b4-919a-a11e3f283450",
+    "description": "diverse visual stimuli, iGluSnFR4f, good RCaMP3, 64 min long, more uniform"
+  },
+  {
+    "asset_id": "75671bb6-2c58-41f9-a53f-8de40cd285df",
+    "description": "drifting gratings, iGluSnFR4f, nice dataset"
+  },
+  {
+    "asset_id": "fa7d8a5a-029e-4236-bd33-2b125bab0867",
+    "description": "VIP, iGluSNFR4f"
+  },
+  {
+    "asset_id": "42a46ab9-da45-4c9e-ac3b-7ce050b6f65b",
+    "description": "P3 glutamate imaging, iGluSnFR4f, 72 min long, variable freshness"
+  },
+  {
+    "asset_id": "9873dcea-3cc2-4b02-a872-9f7b862aa592",
+    "description": "Bergamo iGluSnFR4f dataset, in vivo"
+  },
+  {
+    "asset_id": "89ccc971-921d-4ee1-9649-c157cace748c",
+    "description": "iGluSnFR simulations for GIAnT validation (default)"
+  }
+]
