@@ -145,7 +145,7 @@ if params.isSLAP2
             Finvsel(:,fIxs) = Finv(selPx2D,:);
 
             %compute global ROI activity
-            yLabeled = double(Y2(labeled(:),:,:)); nans= isnan(yLabeled(:,1,:));
+            yLabeled = double(Y2(labeled(:),:,:)); nans= isnan(yLabeled); %per-channel mask, same size as M
             M = repmat(mLabeled,1,1,nFramesInBlock); M(nans) = nan;
             CD.global.F(orderedChannels,fIxs) = (sum(yLabeled,1, 'omitmissing')./sum(M,1, 'omitmissing')).*sumF;
 
@@ -237,7 +237,7 @@ if params.isSLAP2
             Finvsel(:,fIxs) = Finv(selPx2D,:);
 
             %compute global ROI activity
-            yLabeled = double(Y2(labeled(:),:,:)); nans= isnan(yLabeled(:,1,:));
+            yLabeled = double(Y2(labeled(:),:,:)); nans= isnan(yLabeled); %per-channel mask, same size as M
             M = repmat(mLabeled,1,1,nFramesInBlock); M(nans) = nan;
             CD.global.F(orderedChannels,fIxs) = (sum(yLabeled,1, 'omitmissing')./sum(M,1, 'omitmissing')).*sumF;
 
