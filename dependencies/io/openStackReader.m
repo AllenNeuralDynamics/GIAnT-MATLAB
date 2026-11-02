@@ -173,7 +173,9 @@ while remaining > 0
     if isempty(buf)
         error('openStackReader:ShortRead', 'Unexpected end of %s at offset %d', src, offset + nBytes - remaining);
     end
-    fwrite(fo, buf, 'uint8');
+    written = fwrite(fo, buf, 'uint8');
+    assert(written == numel(buf), 'openStackReader:ShortWrite', ...
+        'Wrote %d of %d bytes to %s', written, numel(buf), dst);
     remaining = remaining - numel(buf);
 end
 end
