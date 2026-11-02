@@ -25,6 +25,13 @@ if nargin>6
 end
 % params.lambda = 1; %after the above normalization, setting this higher than 1 (e.g. 2) encourages sparsity of activity
 
+%noise correlated between frames (SLAP2 frames share raw samples; see
+%frameNoiseACF) is whitened in the activity fit, so it is not fit as events
+params.whitenFilt = [];
+if isfield(params, 'whitenNoise') && params.whitenNoise && isfield(params, 'noiseACF') && any(params.noiseACF)
+    params.whitenFilt = whiteningFilter(params.noiseACF);
+end
+
 %break the problem into separable chunks, i.e. nonoverlap sets
 zones = false(sz); zones(sub2ind(sz,sources.R,sources.C)) = true;
 zones = imdilate(zones, strel('disk', ceil(1.5*params.sigma_px+(size(params.validKernel,1)-1)/2)));
@@ -245,10 +252,10 @@ for outerLoop = 1:params.nmfIter
     if doFitS
         opts.TypicalX = typicalX;
         % Objective function handle (returns [f,g, Hinfo])
-        objS = @(x) objfun_S_wrapper(x, Y_obs, H_est, B_est, params.k, Finv, params.lambda);
+        objS = @(x) objfun_S_wrapper(x, Y_obs, H_est, B_est, params.k, Finv, params.lambda, params.whitenFilt);
 
         % Hessian multiply for fmincon signature (x,y,flag)
-        opts.HessianMultiplyFcn = @(hinfo, v, flag) hessmult_S_wrapper(hinfo, Y_obs, H_est, B_est, params.k, Finv, params.lambda, v); %hessmult_S_wrapper takes (Svec, Z, H, B, k, F, lambda, v)
+        opts.HessianMultiplyFcn = @(hinfo, v, flag) hessmult_S_wrapper(hinfo, Y_obs, H_est, B_est, params.k, Finv, params.lambda, v, params.whitenFilt); %hessmult_S_wrapper takes (Svec, Z, H, B, k, F, lambda, v, c)
 
         % Call fmincon
         [S_est_new, lossS] = fmincon(objS, S_est, [], [], [], [], problemS.lb, problemS.ub, [], opts);
@@ -338,8 +345,8 @@ if any(free(:))
     optsDebias.MaxIterations = 10*params.nmfIter;
     optsDebias.TypicalX = typicalX(free);
     optsDebias.HessianMultiplyFcn = @(hinfo, v, varargin) ...
-        hessmult_S_free(hinfo, v, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
-    objS = @(x) objfun_S_free(x, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
+        hessmult_S_free(hinfo, v, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias, params.whitenFilt);
+    objS = @(x) objfun_S_free(x, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias, params.whitenFilt);
     x = fmincon(objS, x0, [], [], [], [], problemS.lb(free), problemS.ub(free), [], optsDebias);
     S_est_new(free) = x;
 end
@@ -631,7 +638,7 @@ end
 %%%%%
 %%%%%
 
-function [f, gS, HvS] = objfun_S(S, Z, H, B, k, F, lambda, v)
+function [f, gS, HvS] = objfun_S(S, Z, H, B, k, F, lambda, v, c)
 % OBJFUN_S  loss, gradient, Hessian-vector product w.r.t. S
 %
 % S : p-by-n
@@ -640,6 +647,8 @@ function [f, gS, HvS] = objfun_S(S, Z, H, B, k, F, lambda, v)
 % k : 1-D kernel (row or column) used in convn(S,k,'same')
 % lambda : scalar regularizer, roughly the scale of 1 photon
 % VS : optional p-by-n perturbation for Hv (same size as S)
+% c : optional causal whitening filter for noise correlated between frames
+%     (see objfun_S_white); [] for independent frames
 %
 % Outputs:
 %  f   : scalar loss
@@ -650,6 +659,12 @@ function [f, gS, HvS] = objfun_S(S, Z, H, B, k, F, lambda, v)
 %   T = H * X + B,  X = convn(S, k, 'same')
 %   f = sum( (Z - T).^2 ./ (F .* (T + lambda)), 'all' )
 
+if nargin >= 9 && ~isempty(c)
+    if nargin < 8, v = []; end
+    [f, gS, HvS] = objfun_S_white(S, Z, H, B, k, F, lambda, v, c);
+    return
+end
+
 % Forward
 X = convn(S, k, 'same');   % p-by-n
 T = H * X + B;             % m-by-n
@@ -659,7 +674,7 @@ s = T + 1; %lambda;            % m-by-n
 % Hessian-vector product branch
 if nargin >= 8 && ~isempty(v)
     for rix = size(v,2):-1:1
-        V = reshape(v(:,rix), size(S,2), size(S,1))';
+        V = reshape(v(:,rix), size(S)); % fmincon passes v in S's own (sources x time) column-major layout
 
         % Forward map of perturbation through conv: dX = convn(VS, k, 'same')
         dX = convn(V, k, 'same');    % p-by-n
@@ -702,37 +717,41 @@ else
 end
 end
 
-function [f, gS, Hinfo] = objfun_S_wrapper(S, Z, H, B, k, F, lambda)
-[f, gS] = objfun_S(S, Z, H, B, k, F, lambda); %objfun_S takes (S, Z, H, B, k, F, lambda, v)
+function [f, gS, Hinfo] = objfun_S_wrapper(S, Z, H, B, k, F, lambda, c)
+if nargin < 8, c = []; end
+[f, gS] = objfun_S(S, Z, H, B, k, F, lambda, [], c); %objfun_S takes (S, Z, H, B, k, F, lambda, v, c)
 Hinfo = S; %Hessian depends on S
 % if f<0 || ~isreal(gS) || ~isreal(f)
 %     keyboard
 % end
 end
 
-function HvS = hessmult_S_wrapper(S, Z, H, B, k, F, lambda, v)
+function HvS = hessmult_S_wrapper(S, Z, H, B, k, F, lambda, v, c)
 % Svec : current S flattened
 % p = size(H,2);
 % n = size(Z,2);
 % S = reshape(S, p, n); %perhaps unnecessary?
+if nargin < 9, c = []; end
 
-[~,~,HvS] = objfun_S(S, Z, H, B, k, F, lambda, v);
+[~,~,HvS] = objfun_S(S, Z, H, B, k, F, lambda, v, c);
 % if ~isreal(HvS)
 %     keyboard
 % end
 end
 
-function [f, g, Hinfo] = objfun_S_free(x, free_idx, szS, Z, H, B, k, F, lambda)
+function [f, g, Hinfo] = objfun_S_free(x, free_idx, szS, Z, H, B, k, F, lambda, c)
 %OBJFUN_S_FREE Objective on free S entries only (scatter/gather into full S).
+if nargin < 10, c = []; end
 S = zeros(szS);
 S(free_idx) = x;
-[f, gS] = objfun_S(S, Z, H, B, k, F, lambda);
+[f, gS] = objfun_S(S, Z, H, B, k, F, lambda, [], c);
 g = gS(free_idx);
 Hinfo = S;
 end
 
-function Hv = hessmult_S_free(Hinfo, v, free_idx, szS, Z, H, B, k, F, lambda)
+function Hv = hessmult_S_free(Hinfo, v, free_idx, szS, Z, H, B, k, F, lambda, c)
 %HESSMULT_S_FREE Hessian-vector product on free S entries only.
+if nargin < 11, c = []; end
 nv = size(v, 2);
 Vfull = zeros(prod(szS), nv);
 for j = 1:nv
@@ -740,12 +759,67 @@ for j = 1:nv
     tmp(free_idx) = v(:, j);
     Vfull(:, j) = tmp(:);
 end
-HvFull = hessmult_S_wrapper(Hinfo, Z, H, B, k, F, lambda, Vfull);
+HvFull = hessmult_S_wrapper(Hinfo, Z, H, B, k, F, lambda, Vfull, c);
 Hv = zeros(numel(free_idx), nv);
 for j = 1:nv
     tmp = reshape(HvFull(:, j), szS);
     Hv(:, j) = tmp(free_idx);
 end
+end
+
+function [f, gS, HvS] = objfun_S_white(S, Z, H, B, k, F, lambda, v, c)
+% OBJFUN_S_WHITE  as objfun_S, for noise correlated between frames
+%
+% The residual is scaled by its noise SD, sqrt(F .* (B + 1)), and whitened in
+% time by the causal filter c (see whiteningFilter), so correlated noise is
+% not fit as events. The variance is held at the baseline's, rather than
+% following T as in objfun_S, which keeps the loss quadratic in S.
+%   f = sum( whiten((Z - T) ./ D).^2, 'all' ) + lambda * sum(S(:)),  D = sqrt(F .* (B + 1))
+
+D = sqrt(F .* (max(B, 0) + 1));   % m-by-n
+X = convn(S, k, 'same');          % p-by-n
+T = H * X + B;                    % m-by-n
+
+if ~isempty(v)
+    for rix = size(v,2):-1:1
+        V = reshape(v(:,rix), size(S));
+        dT = H * convn(V, k, 'same');
+        q = 2 * whitenTimeAdj(whitenTime(dT ./ D, c), c) ./ D;
+        HvS(:,rix) = reshape(convn(H.' * q, flip(k), 'same'), [], 1);
+    end
+    f = [];
+    gS = [];
+else
+    Ew = whitenTime((Z - T) ./ D, c);
+    f = sum(Ew.^2, 'all') + lambda .* sum(S(:));
+    gT = -2 * whitenTimeAdj(Ew, c) ./ D;
+    gS = convn(H.' * gT, flip(k), 'same') + lambda;
+    HvS = [];
+end
+end
+
+function y = whitenTime(x, c)
+%causal filter along time (columns): y(:,t) = sum_l c(l+1) x(:,t-l)
+y = convn(x, c(:)', 'full');
+y = y(:, 1:size(x,2));
+end
+
+function y = whitenTimeAdj(x, c)
+%adjoint of whitenTime
+L = numel(c);
+y = convn(x, flip(c(:)'), 'full');
+y = y(:, L:L+size(x,2)-1);
+end
+
+function c = whiteningFilter(acf)
+%causal filter that whitens noise with autocorrelation acf (lags 1..p):
+%the AR(p) prediction error filter (Yule-Walker), scaled to unit innovation
+%variance, so filtering unit-variance noise gives unit-variance white noise
+r = [1, acf(:)'];
+p = numel(acf);
+phi = toeplitz(r(1:p)) \ r(2:p+1)';
+e = 1 - r(2:p+1) * phi;
+c = [1, -phi'] / sqrt(e);
 end
 
 function Xfloor = computeFloor(X, denoiseWindow, baseline)

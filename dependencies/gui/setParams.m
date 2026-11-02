@@ -12,6 +12,7 @@ switch fnName
         % params.minBaseline = 1/10;              tooltips.minBaseline = 'minimum baseline for source extraction (normalized photon units)';
         params.lambda = 0.9;              tooltips.lambda = 'regularizer for source extraction';
         params.phi = 0;                 tooltips.phi = 'parameter for how much to relax L1 during debiasing';
+        params.whitenNoise = true;      tooltips.whitenNoise = 'in the activity fit, whiten noise that is correlated between frames (SLAP2 frames share raw samples; see frameNoiseACF), so it is not fit as events that pull the baseline (F0) down';
         params.denoiseWindow_s = 0.2;   tooltips.denoiseWindow_s= 'the timescale on which signals can be smoothed when denoising, seconds';
         params.baselineWindow_Glu_s = 4; tooltips.baselineWindow_Glu_s= 'timescale for calculating F0 in glutamate channel, seconds';
         params.baselineWindow_Ca_s = 4;  tooltips.baselineWindow_Ca_s= 'timescale for calculating F0 in calcium channel, seconds';

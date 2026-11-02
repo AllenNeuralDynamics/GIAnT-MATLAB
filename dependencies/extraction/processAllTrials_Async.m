@@ -23,7 +23,12 @@ for i = 1:numel(validTrials)
     disp(['Processing trial ' int2str(validTrials(i)) ' from ' fns{nLoad}])
     %Y = squeeze(CD.Yobs(:,1,:));
     Y = permute(CD.Yobs, [1 3 2]);
-    resultsFuture = extractTrial(Y,CD.Finv, sources, any(selPix,3), params, alignData{nLoad});
+    prm = params;
+    prm.noiseACF = CD.noiseACF;
+    if any(CD.noiseACF)
+        disp(['Noise correlation between frames at lags 1-' int2str(numel(CD.noiseACF)) ': ' mat2str(CD.noiseACF, 2)])
+    end
+    resultsFuture = extractTrial(Y,CD.Finv, sources, any(selPix,3), prm, alignData{nLoad});
     clear CD;
 end
 
@@ -155,6 +160,20 @@ if params.isSLAP2
         rD = viewR(1) - 1 + rT;
         cD = viewC(1) - 1 + cT;
 
+        %correlation of the noise between analysis frames at the source
+        %pixels, which share raw samples (see frameNoiseACF)
+        hdr = S2data.hMultiDataFiles.header;
+        sel = selPx2D(q);
+        noiseMask = []; %all imaged pixels
+        if any(sel)
+            rM = alignDataSlap2.trimRows(min(max(round(rD(sel)), 1), numel(alignDataSlap2.trimRows)));
+            cM = alignDataSlap2.trimCols(min(max(round(cD(sel)), 1), numel(alignDataSlap2.trimCols)));
+            noiseMask = false(double(hdr.dmdPixelsPerColumn), double(hdr.dmdPixelsPerRow)); %getImages' raster image size
+            noiseMask(sub2ind(size(noiseMask), rM(:), cM(:))) = true;
+        end
+        nLags = ceil(2 * max(3 * ceil(dt), double(hdr.linesPerCycle)) / dt); %frames sharing raw samples
+        CD.noiseACF = frameNoiseACF(S2data, frameLines, ceil(dt), 1, nLags, noiseMask);
+
         blocksize = 600; %number of frames to load at a time; 100 frames ~= 1GB RAM usage
         nBlocks = ceil(nFrames./blocksize);
         blockEdges = round(linspace(1, nFrames+1, nBlocks+1));
@@ -231,6 +250,7 @@ if params.isSLAP2
         nPx = size(IM,1)*size(IM,2);
         nFrames = size(IM,4);
         CD.frameLines = 1:nFrames;
+        CD.noiseACF = 0; %frames are separate exposures
 
         %upsample motion
         %position of every common-frame pixel in this trial's registered movie
