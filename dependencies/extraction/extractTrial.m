@@ -659,7 +659,7 @@ s = T + 1; %lambda;            % m-by-n
 % Hessian-vector product branch
 if nargin >= 8 && ~isempty(v)
     for rix = size(v,2):-1:1
-        V = reshape(v(:,rix), size(S,2), size(S,1))';
+        V = reshape(v(:,rix), size(S)); % fmincon passes v in S's own (sources x time) column-major layout
 
         % Forward map of perturbation through conv: dX = convn(VS, k, 'same')
         dX = convn(V, k, 'same');    % p-by-n
