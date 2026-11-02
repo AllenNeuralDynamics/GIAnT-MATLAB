@@ -84,7 +84,7 @@ GIAnT reads tiff and h5 stacks through `readStack`, which detects the storage ea
 | --- | --- |
 | Local disk | direct reads |
 | Windows network share (SMB) | copy to local scratch first when at least 25% of the file is needed, otherwise parallel reads |
-| FUSE mount, e.g. Code Ocean external (S3) data assets | parallel reads (about 7x faster than a single read stream) |
+| FUSE mount, e.g. Code Ocean external (S3) data assets | parallel copy to local scratch, then local reads (about 2.5x faster end to end; 8 concurrent reads get ~300 MB/s from S3, and opening a tiff in place costs one network request per page) |
 | NFS, e.g. Code Ocean internal data assets | direct reads |
 
 Parallel reads use MATLAB's thread-based `backgroundPool`, so they need the Parallel Computing Toolbox to run more than one read at a time. Environment variables:

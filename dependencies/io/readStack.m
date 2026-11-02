@@ -15,7 +15,7 @@ function [data, meta, desc, info] = readStack(fn, planes, varargin)
 % meta and desc are empty. A subset is read as one hyperslab spanning its
 % first to last plane, so it suits contiguous or clustered planes.
 %
-% Options: 'Strategy' ('auto', 'direct', 'copy', 'parallel'), 'ScratchDir',
+% Options: 'Strategy' ('auto', 'direct', 'copy', 'pcopy', 'parallel'), 'ScratchDir',
 % 'NumParallel', 'Dataset' (h5). How 'auto' chooses per storage (local, SMB,
 % S3/FUSE, NFS) is described in openStackReader. info reports the storage
 % class and strategy used.
@@ -51,13 +51,13 @@ try
 catch err
     warning('readStack:Fallback', 'Reading %s with imread (%s).', fn, err.message);
     [data, desc] = readTiffStackImread(fn, planes);
-    info = struct('file', fn, 'storage', storageClass(fn), 'strategy', 'imread', 'copy', '');
+    info = struct('file', fn, 'storage', storageClass(fn), 'strategy', 'imread', 'copy', '', 'index', '');
 end
 end
 
 
 function [data, info] = readH5(fn, planes, opts)
-info = struct('file', fn, 'storage', storageClass(fn), 'strategy', 'direct', 'copy', '');
+info = struct('file', fn, 'storage', storageClass(fn), 'strategy', 'direct', 'copy', '', 'index', '');
 ds = opts.Dataset;
 if isempty(ds)
     h = h5info(fn);

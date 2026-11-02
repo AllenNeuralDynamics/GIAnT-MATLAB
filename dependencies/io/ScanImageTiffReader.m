@@ -23,6 +23,8 @@ classdef ScanImageTiffReader < handle
         % Per-IFD index (cell arrays, one element per IFD / frame)
         ifdTags_             % cell of struct arrays:  .id .type .count .dataOffset .dataNbytes
         ifdStrips_           % cell of struct arrays:  .offset .nbytes
+        ifdOffsets_          % byte offset of each IFD
+        indexPredicted_ = false  % index inferred from fixed page spacing (see buildIndexPredicted_)
 
         % Image geometry (determined from first IFD)
         w_          = 0
@@ -60,9 +62,14 @@ classdef ScanImageTiffReader < handle
 
     % -----------------------------------------------------------------
     methods
-        function obj = ScanImageTiffReader(filename)
+        function obj = ScanImageTiffReader(filename, indexMode)
+            %   reader = ScanImageTiffReader(filename, indexMode): indexMode 'walk'
+            %   (default) reads every IFD; 'predict' infers them from the fixed
+            %   page spacing of ScanImage files, verifying a sample and falling
+            %   back to 'walk' - much faster on remote storage, identical result.
             if nargin > 0
-                obj.open(filename);
+                if nargin < 2, indexMode = 'walk'; end
+                obj.open(filename, indexMode);
             end
         end
 
@@ -70,7 +77,8 @@ classdef ScanImageTiffReader < handle
             obj.close();
         end
 
-        function obj = open(obj, filename)
+        function obj = open(obj, filename, indexMode)
+            if nargin < 3, indexMode = 'walk'; end
             if obj.fid_ > 0
                 obj.close();
             end
@@ -91,7 +99,7 @@ classdef ScanImageTiffReader < handle
             obj.fileSize_ = ftell(obj.fid_);
 
             obj.identify_();
-            obj.buildIndex_();
+            obj.buildIndex_(indexMode);
         end
 
         function obj = close(obj)
@@ -247,12 +255,23 @@ classdef ScanImageTiffReader < handle
             end
         end
 
+        % ----- indexMethod --------------------------------------------
+        function m = indexMethod(obj)
+            %INDEXMETHOD 'predicted' or 'walked': how the IFD index was built.
+            if obj.indexPredicted_, m = 'predicted'; else, m = 'walked'; end
+        end
+
         % ----- descriptions ------------------------------------------
         function desc = descriptions(obj)
             obj.ensureOpen_();
             desc = cell(obj.nplanes_, 1);
+            geom = obj.ifdGeometry_();
             for k = 1:obj.nplanes_
-                tags = obj.ifdTags_{k};
+                if obj.indexPredicted_ %description lengths vary by page: read the real IFD
+                    tags = obj.readIfdAt_(obj.ifdOffsets_(k), geom);
+                else
+                    tags = obj.ifdTags_{k};
+                end
                 ti = find([tags.id] == 270, 1);   % IMAGEDESCRIPTION
                 if ~isempty(ti)
                     tag = tags(ti);
@@ -459,73 +478,208 @@ classdef ScanImageTiffReader < handle
         end
 
         % ----- buildIndex_ ------------------------------------------
-        function buildIndex_(obj)
+        function buildIndex_(obj, indexMode)
+            % Index every IFD: its tags and strip locations. 'walk' follows
+            % the IFD chain; 'predict' infers IFDs from the fixed page spacing
+            % ScanImage files usually have and verifies a sample of them, falling
+            % back to the walk if anything does not match (see buildIndexPredicted_).
             obj.ifdTags_   = {};
             obj.ifdStrips_ = {};
+            obj.ifdOffsets_ = [];
+            obj.indexPredicted_ = false;
+            geom = obj.ifdGeometry_();
 
-            if obj.isBigTiff_
-                entrySz       = 20;
-                nentriesFmt   = 'uint64';
-                offsetFmt     = 'uint64';
-                dataFieldOff  = 12;     % offset within entry to the data/pointer field
-                dataFieldSz   = 8;
-            else
-                entrySz       = 12;
-                nentriesFmt   = 'uint16';
-                offsetFmt     = 'uint32';
-                dataFieldOff  = 8;
-                dataFieldSz   = 4;
+            if strcmpi(indexMode, 'predict')
+                try
+                    if obj.buildIndexPredicted_(geom)
+                        return
+                    end
+                catch %anything unexpected at a predicted offset: walk instead
+                end
+                obj.ifdTags_ = {}; obj.ifdStrips_ = {}; obj.ifdOffsets_ = []; obj.indexPredicted_ = false;
             end
 
             offset   = obj.firstIfdOffset_;
             planeIdx = 0;
-
+            offsets  = zeros(1, 0);
             while offset ~= 0
                 planeIdx = planeIdx + 1;
-
-                fseek(obj.fid_, offset, 'bof');
-                nentries   = fread(obj.fid_, 1, nentriesFmt, 0, obj.machfmt_);
-                entryStart = ftell(obj.fid_);
-
-                raw = fread(obj.fid_, nentries * entrySz, '*uint8');
-
-                nextOffset = fread(obj.fid_, 1, offsetFmt, 0, obj.machfmt_);
-
-                tags = obj.parseEntries_(raw, nentries, entrySz, ...
-                    dataFieldOff, dataFieldSz, entryStart);
-
-                strips = obj.readStripInfo_(tags);
-
+                [tags, strips, nextOffset] = obj.readIfdAt_(offset, geom);
                 if planeIdx == 1
-                    obj.w_ = obj.readTagValue_(tags, 256);    % IMAGEWIDTH
-                    obj.h_ = obj.readTagValue_(tags, 257);    % IMAGELENGTH
-
-                    if any([tags.id] == 277)
-                        obj.nchan_ = obj.readTagValue_(tags, 277);  % SAMPLESPERPIXEL
-                    else
-                        obj.nchan_ = 1;
-                    end
-
-                    bps = obj.readTagValue_(tags, 258);       % BITSPERSAMPLE
-                    obj.bytesPerSample_ = bps / 8;
-
-                    sf = 1;  % default: unsigned
-                    if any([tags.id] == 339)
-                        sf = obj.readTagValue_(tags, 339);    % SAMPLEFORMAT
-                    end
-
-                    [obj.matlabType_, obj.ndType_] = ...
-                        ScanImageTiffReader.resolvePixelType_(sf, bps);
+                    obj.setGeometry_(tags);
                 end
-
                 obj.ifdTags_{planeIdx}   = tags;
                 obj.ifdStrips_{planeIdx} = strips;
-
+                offsets(planeIdx) = offset; %#ok<AGROW>
                 offset = nextOffset;
             end
-
             obj.nplanes_ = planeIdx;
+            obj.ifdOffsets_ = offsets;
+            obj.endOfImageBlock_ = obj.endOfStrips_();
+        end
 
+        % ----- buildIndexPredicted_ -----------------------------------
+        function ok = buildIndexPredicted_(obj, geom)
+            % Predict IFD k at off1 + (k-1)*stride, with the tags and strips of
+            % IFD 1 shifted by the same amount; the page count follows from the
+            % file size. Accept only if IFD 2, ~64 evenly spaced IFDs and the
+            % last IFD all match exactly (same tags and counts, every offset and
+            % strip shifted by (k-1)*stride, next-IFD pointer correct, last
+            % pointer 0). A page of different size anywhere shifts every later
+            % IFD, so it is caught by the next sample or the last-IFD check.
+            % ImageDescription lengths vary between pages even when the
+            % spacing is fixed, so descriptions() re-reads each real IFD.
+            ok = false;
+            off1 = obj.firstIfdOffset_;
+            [t1, s1, next1, rawLen] = obj.readIfdAt_(off1, geom);
+            if next1 == 0 || numel(s1) ~= 1 || ~obj.stripsInline_(t1, geom)
+                return
+            end
+            stride = next1 - off1;
+            stripEnd1 = s1(1).offset + s1(1).nbytes;
+            n = floor((obj.fileSize_ - stripEnd1) / stride) + 1;
+            if stride <= 0 || n < 3
+                return
+            end
+            offs = off1 + (0:n - 1) * stride;
+
+            samples = unique([2, round(linspace(3, n, min(n - 2, 64))), n]);
+            raws = obj.readRanges_(offs(samples), rawLen);
+            for i = 1:numel(samples)
+                k = samples(i);
+                if numel(raws{i}) ~= rawLen ...
+                        || double(obj.typecastValue_(raws{i}(1:geom.countSz), geom.countFmt)) ~= numel(t1)
+                    return %not an IFD like IFD 1 (e.g. the page spacing changes)
+                end
+                [tk, sk, nextk] = obj.parseIfdBytes_(raws{i}, offs(k), geom);
+                if k == n
+                    expectedNext = 0;
+                else
+                    expectedNext = offs(k + 1);
+                end
+                if nextk ~= expectedNext || ~ScanImageTiffReader.ifdMatches_(t1, s1, tk, sk, (k - 1) * stride)
+                    return
+                end
+            end
+
+            obj.setGeometry_(t1);
+            obj.ifdTags_ = cell(1, n);
+            obj.ifdStrips_ = cell(1, n);
+            for k = 1:n
+                d = (k - 1) * stride;
+                tk = t1;
+                for j = 1:numel(tk)
+                    tk(j).dataOffset = tk(j).dataOffset + d;
+                end
+                sk = s1;
+                sk(1).offset = sk(1).offset + d;
+                obj.ifdTags_{k} = tk;
+                obj.ifdStrips_{k} = sk;
+            end
+            obj.nplanes_ = n;
+            obj.ifdOffsets_ = offs;
+            obj.indexPredicted_ = true;
+            obj.endOfImageBlock_ = obj.endOfStrips_();
+            ok = true;
+        end
+
+        % ----- IFD reading helpers ----------------------------------
+        function geom = ifdGeometry_(obj)
+            if obj.isBigTiff_
+                geom = struct('entrySz', 20, 'countSz', 8, 'countFmt', 'uint64', ...
+                    'offsetFmt', 'uint64', 'offsetSz', 8, 'dataFieldOff', 12, 'dataFieldSz', 8);
+            else
+                geom = struct('entrySz', 12, 'countSz', 2, 'countFmt', 'uint16', ...
+                    'offsetFmt', 'uint32', 'offsetSz', 4, 'dataFieldOff', 8, 'dataFieldSz', 4);
+            end
+        end
+
+        function [tags, strips, nextOffset, rawLen] = readIfdAt_(obj, offset, geom)
+            fseek(obj.fid_, offset, 'bof');
+            nentries   = fread(obj.fid_, 1, geom.countFmt, 0, obj.machfmt_);
+            entryStart = ftell(obj.fid_);
+            raw        = fread(obj.fid_, nentries * geom.entrySz, '*uint8');
+            nextOffset = fread(obj.fid_, 1, geom.offsetFmt, 0, obj.machfmt_);
+            tags   = obj.parseEntries_(raw, nentries, geom.entrySz, geom.dataFieldOff, geom.dataFieldSz, entryStart);
+            strips = obj.readStripInfo_(tags);
+            rawLen = geom.countSz + nentries * geom.entrySz + geom.offsetSz;
+        end
+
+        function [tags, strips, nextOffset] = parseIfdBytes_(obj, bytes, offset, geom)
+            % parse an IFD from its raw bytes (count, entries, next pointer);
+            % strip locations must be stored inline in the entries
+            nentries = double(obj.typecastValue_(bytes(1:geom.countSz), geom.countFmt));
+            entries  = bytes(geom.countSz + (1:nentries * geom.entrySz));
+            tags = obj.parseEntries_(entries, nentries, geom.entrySz, geom.dataFieldOff, geom.dataFieldSz, offset + geom.countSz);
+            nextOffset = double(obj.typecastValue_(bytes(geom.countSz + nentries * geom.entrySz + (1:geom.offsetSz)), geom.offsetFmt));
+            offs = obj.inlineTagValues_(tags, 273, entries, offset + geom.countSz);
+            cnts = obj.inlineTagValues_(tags, 279, entries, offset + geom.countSz);
+            strips = struct('offset', num2cell(offs), 'nbytes', num2cell(cnts));
+        end
+
+        function vals = inlineTagValues_(obj, tags, tagId, entries, entryStart)
+            t = tags(find([tags.id] == tagId, 1));
+            if isempty(t)
+                vals = [];
+                return
+            end
+            a = t.dataOffset - entryStart + 1;
+            vals = double(obj.typecastValue_(entries(a:a + t.dataNbytes - 1), ScanImageTiffReader.tiffTypeToMatlab_(t.type)))';
+        end
+
+        function v = typecastValue_(obj, bytes, mtype)
+            v = typecast(bytes(:)', mtype);
+            if obj.needSwap_
+                v = swapbytes(v);
+            end
+        end
+
+        function tf = stripsInline_(~, tags, geom)
+            o = tags(find([tags.id] == 273, 1));
+            c = tags(find([tags.id] == 279, 1));
+            tf = ~isempty(o) && ~isempty(c) && o.dataNbytes <= geom.dataFieldSz && c.dataNbytes <= geom.dataFieldSz;
+        end
+
+        function raws = readRanges_(obj, offsets, nbytes)
+            % read nbytes at each offset; concurrently when a thread pool is
+            % available (each read waits on the network on remote storage)
+            raws = cell(1, numel(offsets));
+            try
+                pool = backgroundPool;
+                if pool.NumWorkers < 2 || numel(offsets) < 4
+                    error('ScanImageTiffReader:NoParallelPool', 'sequential');
+                end
+                futures(numel(offsets)) = parallel.FevalFuture;
+                for i = 1:numel(offsets)
+                    futures(i) = parfeval(pool, @ScanImageTiffReader.readByteRange_, 1, obj.filename_, offsets(i), nbytes);
+                end
+                raws = fetchOutputs(futures, 'UniformOutput', false)';
+            catch
+                for i = 1:numel(offsets)
+                    fseek(obj.fid_, offsets(i), 'bof');
+                    raws{i} = fread(obj.fid_, nbytes, '*uint8');
+                end
+            end
+        end
+
+        function setGeometry_(obj, tags)
+            obj.w_ = obj.readTagValue_(tags, 256);    % IMAGEWIDTH
+            obj.h_ = obj.readTagValue_(tags, 257);    % IMAGELENGTH
+            if any([tags.id] == 277)
+                obj.nchan_ = obj.readTagValue_(tags, 277);  % SAMPLESPERPIXEL
+            else
+                obj.nchan_ = 1;
+            end
+            bps = obj.readTagValue_(tags, 258);       % BITSPERSAMPLE
+            obj.bytesPerSample_ = bps / 8;
+            sf = 1;  % default: unsigned
+            if any([tags.id] == 339)
+                sf = obj.readTagValue_(tags, 339);    % SAMPLEFORMAT
+            end
+            [obj.matlabType_, obj.ndType_] = ScanImageTiffReader.resolvePixelType_(sf, bps);
+        end
+
+        function maxEnd = endOfStrips_(obj)
             maxEnd = 0;
             for k = 1:obj.nplanes_
                 ss = obj.ifdStrips_{k};
@@ -533,7 +687,6 @@ classdef ScanImageTiffReader < handle
                     maxEnd = max(maxEnd, ss(j).offset + ss(j).nbytes);
                 end
             end
-            obj.endOfImageBlock_ = maxEnd;
         end
 
         % ----- parseEntries_ ----------------------------------------
@@ -695,6 +848,22 @@ classdef ScanImageTiffReader < handle
     %  Static private helpers (no file access needed)
     % =================================================================
     methods (Static, Access = private)
+
+        function tf = ifdMatches_(t1, s1, tk, sk, shift)
+            % IFD k equals IFD 1 shifted by shift bytes: same tags, types and
+            % counts (ImageDescription length may differ), every data offset and
+            % strip offset moved by shift, same strip byte counts
+            tf = numel(tk) == numel(t1) && isequal([tk.id], [t1.id]) && isequal([tk.type], [t1.type]);
+            if ~tf
+                return
+            end
+            notDesc = [t1.id] ~= 270;
+            tf = isequal([tk(notDesc).count], [t1(notDesc).count]) ...
+                && isequal([tk.dataOffset], [t1.dataOffset] + shift) ...
+                && numel(sk) == numel(s1) && isequal([sk.offset], [s1.offset] + shift) ...
+                && isequal([sk.nbytes], [s1.nbytes]);
+        end
+
 
         function sz = tiffTypeSize_(typeId)
             persistent sizes
