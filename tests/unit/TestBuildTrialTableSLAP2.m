@@ -1,8 +1,8 @@
 classdef TestBuildTrialTableSLAP2 < matlab.unittest.TestCase
     %TESTBUILDTRIALTABLESLAP2 Unit tests for buildTrialTableSLAP2.
-    %   Uses test doubles in tests/fakes for the SLAP2 reader and the
+    %   Uses test doubles in tests/unit/fakes for the SLAP2 reader and the
     %   reference-stack TIFF reader, so no real SLAP2 data is needed.
-    %   Run with: runtests('tests/TestBuildTrialTableSLAP2.m')
+    %   Run with: runtests('tests/unit/TestBuildTrialTableSLAP2.m')
 
     properties
         DataDir
@@ -15,7 +15,7 @@ classdef TestBuildTrialTableSLAP2 < matlab.unittest.TestCase
         function addPaths(testCase)
             import matlab.unittest.fixtures.PathFixture
             testsDir = fileparts(mfilename('fullpath'));
-            repoRoot = fileparts(testsDir);
+            repoRoot = fileparts(fileparts(testsDir));
             testCase.applyFixture(PathFixture(repoRoot));
             testCase.applyFixture(PathFixture(fullfile(repoRoot, 'dependencies'), ...
                 'IncludingSubfolders', true));
