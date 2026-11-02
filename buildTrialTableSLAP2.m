@@ -198,7 +198,7 @@ for eIx = 1:epoch %for each epoch
     accumLines = [0 0];
     while lastDMD2fIx<length(DMD2files) && lastDMD1fIx<length(DMD1files)
 
-        %ocnfirm that the trials match up AT SOME POINT SOON
+        %confirm that the trials match up AT SOME POINT SOON
         cumLines1 = cumsum(numLinesDMD1(lastDMD1fIx+1: min(end, lastDMD1fIx+5)))-accumLines(1);
         cumLines2 = cumsum(numLinesDMD2(lastDMD2fIx+1: min(end, lastDMD2fIx+5)))-accumLines(2);
         assert(min(abs(cumLines1 - cumLines2'), [],'all')<lineDiffThresh, 'Error lining up trials across DMDs!')
