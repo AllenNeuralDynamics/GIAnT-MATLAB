@@ -19,6 +19,8 @@ POLL_SECONDS = 30
 COMMIT_FILE = "giant_commit.txt"
 TRIAL_TABLE_FILE = "trial_table.h5"
 SUMMARY_FILE = "smoke_test.json"
+LOG_FILE = "output"
+LOG_TAIL_LINES = 40
 
 
 def parse_args() -> argparse.Namespace:
@@ -62,6 +64,15 @@ def check_results(client: CodeOcean, computation_id: str, giant_sha: str) -> tup
     return failures, summary
 
 
+def log_tail(client: CodeOcean, computation_id: str) -> str:
+    """Return the last lines of the capsule's output log, or a note when it is unavailable."""
+    try:
+        text = read_result_text(client, computation_id, LOG_FILE)
+    except Exception as error:
+        return f"log unavailable: {error}"
+    return "\n".join(text.splitlines()[-LOG_TAIL_LINES:])
+
+
 def write_step_summary(lines: list[str]) -> None:
     """Append lines to the GitHub Actions job summary when running in Actions."""
     path = os.environ.get("GITHUB_STEP_SUMMARY")
@@ -103,12 +114,11 @@ def main() -> int:
         if computation.end_status != ComputationEndStatus.Succeeded:
             status = computation.end_status.value if computation.end_status else None
             failures.append(f"computation end status is {status}")
-        if computation.has_results:
-            result_failures, summary = check_results(client, computation.id, args.giant_sha)
-            failures.extend(result_failures)
-        else:
-            failures.append("computation produced no results")
-            summary = {}
+        # Code Ocean reports end_status "succeeded" even when the capsule exits nonzero.
+        if computation.exit_code != 0:
+            failures.append(f"capsule exited with code {computation.exit_code}")
+        result_failures, summary = check_results(client, computation.id, args.giant_sha)
+        failures.extend(result_failures)
 
     verdict = "failed" if failures else "passed"
     lines = [
@@ -119,6 +129,8 @@ def main() -> int:
     lines += [f"- Failure: {message}" for message in failures]
     if summary:
         lines += ["", "```json", json.dumps(summary, indent=2), "```"]
+    if failures:
+        lines += ["", "Capsule log (tail):", "```", log_tail(client, computation.id), "```"]
     write_step_summary(lines)
     print("\n".join(lines))
     return 1 if failures else 0
