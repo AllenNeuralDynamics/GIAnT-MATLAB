@@ -1,9 +1,6 @@
 function E = processAllTrials_Async(dr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, motOutput, roiData, validTrials, params)
-curPool = gcp('nocreate');
-if isempty(curPool) || ~strcmpi(class(curPool), 'parallel.ThreadPool') %  ~strcmpi(class(curPool), 'parallel.ProcessPool') %
-    delete(curPool);
-    parpool('Threads'); %use all available Threads
-end
+%subproblems run on a pool of worker processes (see extractionPool)
+extractionPool(params);
 numDatasets = numel(fls);
 E = cell(numDatasets,1); 
 for i = 1:numel(validTrials)
@@ -118,7 +115,19 @@ if params.isSLAP2
         meanPx = reshape(meanIM, numel(labeled), numChannels);
         mLabeled = meanPx(labeled,:);
 
-        blocksize = 600; %number of frames to load at a time; 100 frames ~= 1GB RAM usage
+        %pixels to sample: sources, labeled pixels (global activity) and user
+        %ROIs. Pixel (r,c) of the view is read at row viewR(r) + motionR and
+        %column viewC(c) + motionC of the trimmed datafile image.
+        need = selPx2D | labeled;
+        for rix = 1:length(roiData)
+            need = need | reshape(logical(roiData{rix}.mask), size(need));
+        end
+        q = find(need);
+        [rq, cq] = ind2sub(size(need), q);
+        rD = viewR(rq); cD = viewC(cq);
+        qpos = zeros(nPx, 1); qpos(q) = 1:numel(q); %rows of the sampled pixels q
+
+        blocksize = 600; %number of frames to load at a time
         nBlocks = ceil(nFrames./blocksize);
         blockEdges = round(linspace(1, nFrames+1, nBlocks+1));
 
@@ -127,32 +136,24 @@ if params.isSLAP2
         Finvsel = nan(sum(selPx2D(:)),nFrames);
         for bix = nBlocks:-1:1
             fIxs  = blockEdges(bix):(blockEdges(bix+1)-1);
-            [Y, Fresh] = S2data.getImages(orderedChannels,frameLines(fIxs),ceil(dt),1,1);
-            Y = Y(alignDataSlap2.trimRows, alignDataSlap2.trimCols,:,:);
-            Fresh = Fresh(alignDataSlap2.trimRows, alignDataSlap2.trimCols,:);
-            nFramesInBlock = size(Y,4);
+            nFramesInBlock = length(fIxs);
+            %as getImages(orderedChannels, frameLines(fIxs), ceil(dt), 1, 1), trimmed
+            %and interpolated with interpFrames, at the sampled pixels only
+            [Yq, Fq] = slap2FramesAt(S2data, orderedChannels, frameLines(fIxs), ceil(dt), ...
+                alignDataSlap2.trimRows, alignDataSlap2.trimCols, rD, cD, motionR(fIxs), motionC(fIxs));
 
-            Y2 = nan(length(viewR),length(viewC),numChannels, nFramesInBlock);
-            Finv = nan(length(viewR),length(viewC),nFramesInBlock);
-            parfor frIx = 1:nFramesInBlock
-                [Y2(:,:,:,frIx), Finv(:,:,frIx)] = interpFrames(Y(:,:,:,frIx),viewC+motionC(fIxs(frIx)), viewR+motionR(fIxs(frIx)), Fresh(:,:,frIx));
-            end
-
-            Y2 = reshape(Y2, nPx, numChannels, nFramesInBlock);
-            Finv= reshape(Finv, nPx, nFramesInBlock);
-
-            IMsel(:, :, fIxs) = Y2(selPx2D,:,:);
-            Finvsel(:,fIxs) = Finv(selPx2D,:);
+            IMsel(:, :, fIxs) = Yq(qpos(selPx2D(:)),:,:);
+            Finvsel(:,fIxs) = Fq(qpos(selPx2D(:)),:);
 
             %compute global ROI activity
-            yLabeled = double(Y2(labeled(:),:,:)); nans= isnan(yLabeled(:,1,:));
+            yLabeled = double(Yq(qpos(labeled(:)),:,:)); nans= isnan(yLabeled(:,1,:));
             M = repmat(mLabeled,1,1,nFramesInBlock); M(nans) = nan;
             CD.global.F(orderedChannels,fIxs) = (sum(yLabeled,1, 'omitmissing')./sum(M,1, 'omitmissing')).*sumF;
 
             %compute user ROI activity
             for rix = length(roiData):-1:1
                 mask = roiData{rix}.mask;
-                tmp1 = Y2(mask(:),:,:);  %the data over the ROI pixels
+                tmp1 = Yq(qpos(mask(:)),:,:);  %the data over the ROI pixels
                 Fpx{rix}(:,:,fIxs) = tmp1;
                 tmp2 = repmat(meanPx(mask(:),:), 1,1,numel(fIxs)); %the mean image over the ROI pixels
                 nans= isnan(tmp1) | isnan(tmp2);
@@ -289,4 +290,99 @@ Finvsel(squeeze(nans(:,1,:))) = 1000*mean(Finvsel,'all', 'omitmissing');
 CD.Yobs = IMsel;
 CD.Finv = Finvsel;
 CD.discardFrames = discard;
+end
+
+function [Yq, Fq] = slap2FramesAt(S2, ch, times, dt, trimRows, trimCols, rD, cD, mR, mC)
+%the frames getImages(ch, times, dt, 1, 1) returns, trimmed to trimRows x
+%trimCols and interpolated as interpFrames does, at rows rD + mR(f) and columns
+%cD + mC(f) of frame f: Yq is numel(rD) x channels x frames, Fq (the variance
+%multiplier) numel(rD) x frames. Frames are formed only at the raster
+%superpixels that these points' neighbours can fall on in this block, and only
+%the lines that sample those are read, which is several times faster than
+%forming whole frames.
+hdr = S2.hMultiDataFiles.header;
+NR = double(hdr.dmdPixelsPerRow); NC = double(hdr.dmdPixelsPerColumn);
+nF = numel(times); nCh = numel(ch); nq = numel(rD); n1 = numel(trimRows); n2 = numel(trimCols);
+%pixels within the block's motion range of each point
+mark = false(n1, n2);
+r0 = floor(rD(:) + min(mR)); c0 = floor(cD(:) + min(mC));
+for dr = 0:(ceil(max(mR) - min(mR)) + 1)
+    for dc = 0:(ceil(max(mC) - min(mC)) + 1)
+        r = r0 + dr; c = c0 + dc; ok = r >= 1 & r <= n1 & c >= 1 & c <= n2;
+        mark(r(ok) + n1 * (c(ok) - 1)) = true;
+    end
+end
+need = find(mark); [rt, ct] = ind2sub([n1 n2], need);
+id = trimCols(ct(:)) + NR * (trimRows(rt(:)) - 1);   % getImages' raster image is the transpose of superpixel order
+[V, W] = rawFramesAt(S2, ch, times, dt, id(:), NR * NC);   % needed pixels x frames (x channels)
+nN = numel(need);
+V(nN+1, :, :) = nan; W(nN+1, :) = nan;   % the row for neighbours outside the image
+tpos = (nN + 1) * ones(n1 * n2 + 1, 1); tpos(need + 1) = 1:nN;   % trimmed-image index + 1 -> row
+%the four neighbours of each point in each frame, and their bilinear weights (as interpFrames)
+R = rD(:) + mR(:).'; C = cD(:) + mC(:).';
+rf = floor(R); cf = floor(C); fr = R - rf; fc = C - cf;
+rc = ceil(R); ccl = ceil(C);
+fOff = 1:nF;   % frame index, along columns
+num = zeros(nq, nF, nCh); den = zeros(nq, nF);
+rs = {rf, rf, rc, rc}; cs = {cf, ccl, cf, ccl};
+for k = 1:4
+    switch k
+        case 1, w = (1 - fc) .* (1 - fr);
+        case 2, w = fc .* (1 - fr);
+        case 3, w = (1 - fc) .* fr;
+        case 4, w = fc .* fr;
+    end
+    r = rs{k}; c = cs{k};
+    ok = r >= 1 & r <= n1 & c >= 1 & c <= n2;
+    j = tpos((r + n1 * (c - 1)) .* ok + 1);    % invalid -> the NaN column
+    ix = j + (nN + 1) * (fOff - 1);   % neighbouring points read neighbouring rows
+    f = W(ix);
+    den = den + w .* f;
+    wf = w .* f;
+    for cI = 1:nCh
+        num(:, :, cI) = num(:, :, cI) + wf .* V(ix + (nN + 1) * nF * (cI - 1));
+    end
+end
+Yq = permute(num ./ den, [1 3 2]);
+Fq = 1 ./ den; Fq(isinf(Fq)) = nan;
+end
+
+function [V, W] = rawFramesAt(S2, ch, times, dt, id, nRaster)
+%getImages' frames at raster superpixels id only: V is numel(id) x frames x
+%channels, W (getImages' dataCount) numel(id) x frames
+hdr = S2.hMultiDataFiles.header; P = double(hdr.linesPerCycle);
+dtRead = max(3 * dt, P); total = S2.hMultiDataFiles.totalNumLines;
+inWin = false(1, max(times) + dtRead);
+for t = times(:).', inWin(max(1, t - dtRead):min(total, t + dtRead)) = true; end
+lineTimes = find(inWin);
+li = mod(lineTimes - 1, P) + 1; ci = floor((lineTimes - 1) / P) + 1;
+z = S2.hMultiDataFiles.lineFastZIdxs(li) == 1;
+lineTimes = lineTimes(z); li = li(z); ci = ci(z);
+map = zeros(nRaster, 1); map(id) = 1:numel(id);
+nF = numel(times); nN = numel(id); nCh = numel(ch);
+Ls = unique(li); sel = cell(1, P); col = cell(1, P); use = false(size(Ls));
+for j = 1:numel(Ls)
+    ids = double(S2.hMultiDataFiles.lineSuperPixelIDs{Ls(j)}(:)) + 1;
+    m = zeros(size(ids)); ok = ids <= nRaster; m(ok) = map(ids(ok));
+    sel{Ls(j)} = find(m > 0); col{Ls(j)} = m(m > 0); use(j) = any(m > 0);
+end
+keep = ismember(li, Ls(use));   % only lines that sample a needed superpixel are read
+lineTimes = lineTimes(keep); li = li(keep); ci = ci(keep);
+ld = S2.hMultiDataFiles.getLineData(li, ci, ch);
+Lu = Ls(use); parts = cell(numel(Lu), nCh); wparts = cell(numel(Lu), 1); cols = cell(numel(Lu), 1);
+for j = 1:numel(Lu)
+    L = Lu(j); k = find(li == L);
+    D = cat(3, ld{k}); D = double(D(sel{L}, :, :));   % pixels x channels x cycles
+    d = times(:) - lineTimes(k);
+    [fi, ki] = find(abs(d) < dtRead);
+    Wk = sparse(fi, ki, exp(-abs(d(abs(d) < dtRead)) / dt), nF, numel(k));   % frames x cycles
+    for c = 1:nCh, parts{j, c} = Wk * reshape(D(:, c, :), numel(sel{L}), []).'; end
+    wparts{j} = full(sum(Wk, 2)) * ones(1, numel(sel{L}));
+    cols{j} = col{L};
+end
+cols = vertcat(cols{:}); S = sparse(1:numel(cols), cols, 1, numel(cols), nN);   % sums pixels sampled on several lines
+V = zeros(nN, nF, nCh);
+for c = 1:nCh, V(:, :, c) = full(S.' * [parts{:, c}].'); end
+W = full(S.' * [wparts{:}].');
+V = V ./ W;
 end
