@@ -17,6 +17,13 @@ jobs:
 
       - name: Setup MATLAB
         uses: matlab-actions/setup-matlab@v3.1.0
+        with:
+          products: >
+            Parallel_Computing_Toolbox
+            Image_Processing_Toolbox
+            Optimization_Toolbox
+            Signal_Processing_Toolbox
+            Statistics_and_Machine_Learning_Toolbox
 
       - name: Run MATLAB Tests
         uses: matlab-actions/run-tests@v3.3.0

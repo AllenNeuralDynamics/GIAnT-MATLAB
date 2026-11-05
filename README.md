@@ -17,11 +17,15 @@ Tested from **MATLAB R2023b** onward.
 * Signal Processing Toolbox
 * Statistics and Machine Learning Toolbox
 
-Clone this repository and add it (and its subfolders) to the MATLAB path:
+Clone this repository and add it and its subfolders to the MATLAB path, leaving out `tests/`:
 
 ```matlab
-addpath(genpath('/path/to/GIAnT-MATLAB'));
+repo = '/path/to/GIAnT-MATLAB';
+p = strsplit(genpath(repo), pathsep);
+addpath(strjoin(p(~startsWith(p, [repo filesep 'tests'])), pathsep));
 ```
+
+Do **not** add `tests/` to the path. It contains test fakes with the same names as real functions and classes (e.g. `slap2.Slap2DataFile`, `Fast_BigTiff_Write`) that would replace them when running the pipeline. The unit tests add these folders themselves.
 
 Also add any external packages below to the path (e.g. `addpath(genpath(...))`).
 
