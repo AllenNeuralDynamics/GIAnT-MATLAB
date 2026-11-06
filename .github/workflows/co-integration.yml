@@ -1,0 +1,56 @@
+name: Code Ocean integration
+
+# Runs pull-request code in Code Ocean, never on the runner. A maintainer adds the
+# `co-integration` label to approve each run; the label is removed when the run starts,
+# so every new commit needs a fresh approval.
+on:
+  # TEMPORARY: exercise the check from the feature branch before merge; remove before opening the PR.
+  push:
+    branches: [feat/co-integration-check]
+  pull_request_target:
+    types: [labeled]
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      giant_sha:
+        description: GIAnT-MATLAB commit to test
+        required: true
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: co-integration-${{ github.event.pull_request.number || inputs.giant_sha }}
+  cancel-in-progress: true
+
+jobs:
+  code-ocean:
+    if: github.event_name != 'pull_request_target' || github.event.label.name == 'co-integration'
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    env:
+      GIANT_SHA: ${{ github.event.pull_request.head.sha || inputs.giant_sha || github.sha }}
+    steps:
+      - name: Remove approval label
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --remove-label co-integration
+
+      # pull_request_target checks out the base branch, so pull-request code never reaches the runner.
+      - name: Check out scripts
+        uses: actions/checkout@v4
+        with:
+          sparse-checkout: .github/scripts
+
+      - uses: astral-sh/setup-uv@v6
+
+      - name: Run integration capsule
+        env:
+          CODEOCEAN_TOKEN: ${{ secrets.CODEOCEAN_TOKEN }}
+        run: >
+          uv run --no-project --with codeocean==0.17.0
+          .github/scripts/co_integration.py
+          --giant-sha "$GIANT_SHA"
+          --capsule-id "${{ vars.CO_INTEGRATION_CAPSULE_ID }}"
