@@ -45,10 +45,17 @@ for iter = 1:maxIter
     end
 end
 
+%svds returns min(numComps, min(size(D))) components, so fewer when D has
+%fewer valid pixels or timepoints than numComps; pad so outputs always have
+%numComps components (NaN in U and V, zero singular values in S)
+nFound = size(U,2);
 Uout = nan(length(selRows),numComps);
-Uout(selRows,:) = U;
+Uout(selRows,1:nFound) = U;
 Vout = nan(length(selCols), numComps);
-Vout(selCols,:) = V;
+Vout(selCols,1:nFound) = V;
+if nFound < numComps
+    S(numComps,numComps) = 0; %grows S, filling the new entries with zeros
+end
 BG = nan(length(selRows),length(selCols));
 BG(selRows,selCols) = bg;
 end
