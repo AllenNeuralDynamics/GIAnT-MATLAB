@@ -167,9 +167,9 @@ if params.isSLAP2
         for rix = 1:length(roiData)
             if ~isempty(Fpx{rix}) && ~all(isnan(Fpx{rix}(:)))
                 for cix = 1:numel(orderedChannels)
-                    Dtmp = squeeze(double(Fpx{rix}(:,cix,:)));
+                    Dtmp = double(permute(Fpx{rix}(:,cix,:), [1 3 2])); %pixels x frames; squeeze would transpose a one-pixel ROI
                     [UU,SS,VV,bg] = nansvd(Dtmp,3, 10, params.nanThresh);
-                    roiLikeness = (abs(mean(UU,1, 'omitnan'))./sqrt(mean(UU.^2,1, 'omitnan')))*SS;
+                    roiLikeness = (abs(mean(UU,1, 'omitnan'))./sqrt(mean(UU.^2,1, 'omitnan'))).*diag(SS)'; %components nansvd padded are NaN, which max skips
                     [~,selPC] = max(roiLikeness);
                     CD.ROIs.Fsvd(rix,cix,:) = mean(bg+(UU(:,selPC)*SS(selPC,selPC)*VV(:,selPC)'),1, 'omitnan');
                 end
@@ -259,9 +259,9 @@ if params.isSLAP2
         for rix = 1:length(roiData)
             if ~isempty(Fpx{rix}) && ~all(isnan(Fpx{rix}(:)))
                 for cix = 1:numel(orderedChannels)
-                    Dtmp = squeeze(double(Fpx{rix}(:,cix,:)));
+                    Dtmp = double(permute(Fpx{rix}(:,cix,:), [1 3 2])); %pixels x frames; squeeze would transpose a one-pixel ROI
                     [UU,SS,VV,bg] = nansvd(Dtmp,3, 10, params.nanThresh);
-                    roiLikeness = (abs(mean(UU,1, 'omitnan'))./sqrt(mean(UU.^2,1, 'omitnan')))*SS;
+                    roiLikeness = (abs(mean(UU,1, 'omitnan'))./sqrt(mean(UU.^2,1, 'omitnan'))).*diag(SS)'; %components nansvd padded are NaN, which max skips
                     [~,selPC] = max(roiLikeness);
                     CD.ROIs.Fsvd(rix,cix,:) = mean(bg+(UU(:,selPC)*SS(selPC,selPC)*VV(:,selPC)'),1, 'omitnan');
                 end
