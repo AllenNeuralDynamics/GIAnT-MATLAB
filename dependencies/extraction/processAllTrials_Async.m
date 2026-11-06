@@ -134,6 +134,7 @@ if params.isSLAP2
         labeled = ~isnan(meanIM(:,:,params.activityChannel)) & labeled>3*prctile(labeled(~isnan(labeled)), 25); %labeled pixels
         
         meanPx = reshape(meanIM, numel(labeled), numChannels);
+        meanPx = meanPx(:, orderedChannels); %meanIM is in raw channel order; match the reordered frames below
         mLabeled = meanPx(labeled,:);
 
         blocksize = 600; %number of frames to load at a time; 100 frames ~= 1GB RAM usage
@@ -145,8 +146,12 @@ if params.isSLAP2
         Finvsel = nan(sum(selPx2D(:)),nFrames);
         for bix = nBlocks:-1:1
             fIxs  = blockEdges(bix):(blockEdges(bix+1)-1);
-            [Y, Fresh] = S2data.getImages(orderedChannels,frameLines(fIxs),ceil(dt),1,1);
-            Y = Y(alignDataSlap2.trimRows, alignDataSlap2.trimCols,:,:);
+            %read channels in raw file order and reorder here: the slap2 reader returns
+            %channels in file order regardless of the order requested
+            [Y, Fresh] = S2data.getImages(1:numChannels,frameLines(fIxs),ceil(dt),1,1);
+            assert(size(Y,3) == numChannels, 'GIAnT:channelCountMismatch', ...
+                'SLAP2 reader returned %d channels; expected %d.', size(Y,3), numChannels);
+            Y = Y(alignDataSlap2.trimRows, alignDataSlap2.trimCols,orderedChannels,:);
             Fresh = Fresh(alignDataSlap2.trimRows, alignDataSlap2.trimCols,:);
             nFramesInBlock = size(Y,4);
 
@@ -225,6 +230,7 @@ if params.isSLAP2
         scored = (scored-prctile(scored(:),25,'all'))./(prctile(scored(:),99,'all')-prctile(scored(:),25,'all'));
         labeled = scored>0.1;
         meanPx = reshape(meanIM, numel(labeled), numChannels);
+        meanPx = meanPx(:, orderedChannels); %meanIM is in raw channel order; match the reordered frames below
         mLabeled = meanPx(labeled,:);
 
         blocksize = 600; %number of frames to load at a time;
@@ -240,7 +246,7 @@ if params.isSLAP2
             nFramesInBlock = length(fIxs);
             
             Y = IM(:,:,:,fIxs); %reduce communication overhead to parallel workers
-            nanMask = isnan(Y);
+            nanMask = isnan(Y(:,:,orderedChannels,:)); %Y2 below is in analysis channel order
             Y2 = nan(length(viewR),length(viewC),numChannels, nFramesInBlock);
             Finv = nan(length(viewR),length(viewC),nFramesInBlock);
             parfor frIx = 1:nFramesInBlock
