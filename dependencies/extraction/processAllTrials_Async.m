@@ -73,6 +73,10 @@ catch ME
     fprintf(2, 'processResult ERROR: %s\n', ME.message);
     fprintf(2, '%s\n', getReport(ME, 'extended', 'hyperlinks', 'off'));
 end
+%free the trial's futures: kept, the client grew by ~3 GB per 780125 trial
+%until the pool was deleted
+delete(resultsFuture.Predecessors);
+delete(resultsFuture);
 end
 
 function CD = loadTrial(dr, fn, startLine, endLine, selPix, discardFrames, alignData, meanIM, motOutput, roiData, params)
