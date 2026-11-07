@@ -12,9 +12,14 @@ classdef Slap2DataFile < handle
     %     shiftAfterLine - from this line on, sample the texture at +shift
     %     shift          - [rows cols] integer shift
     %     failOnCall     - getImage errors on this call number and later
+    %     firstLineTime  - datetime of the file's first line; if set, the
+    %                      file gets FPGA line-clock metadata like the real
+    %                      reader's (firstLineTimestamp, fpgaTimeReference)
 
     properties (Constant)
         LinePeriod_s = 1e-4
+        FpgaClock_Hz = 2e8
+        FpgaTimeReference = datetime(2024, 2, 1, 9, 0, 0)
     end
 
     properties
@@ -38,8 +43,19 @@ classdef Slap2DataFile < handle
             obj.numChannels = obj.config.numChannels;
             obj.texture = slap2.Slap2DataFile.makeTexture(obj.config.frameSize);
             linesPerCycle = 1000;
+            metaData = struct('linePeriod_s', slap2.Slap2DataFile.LinePeriod_s);
+            header = struct();
+            firstLineTimestamp = uint64(0);
+            if ~isnat(obj.config.firstLineTime)
+                metaData.fpgaTimeReference = slap2.Slap2DataFile.FpgaTimeReference;
+                header.fpgaSystemClock_Hz = slap2.Slap2DataFile.FpgaClock_Hz;
+                firstLineTimestamp = uint64(round(seconds(obj.config.firstLineTime ...
+                    - slap2.Slap2DataFile.FpgaTimeReference) * slap2.Slap2DataFile.FpgaClock_Hz));
+            end
             obj.hDataFile = struct( ...
-                'metaData', struct('linePeriod_s', slap2.Slap2DataFile.LinePeriod_s), ...
+                'metaData', metaData, ...
+                'header', header, ...
+                'firstLineTimestamp', firstLineTimestamp, ...
                 'fastZs', 0, ...
                 'lineHeaderIdxs', 1:linesPerCycle, ...
                 'numCycles', ceil(obj.totalNumLines/linesPerCycle), ...
@@ -69,7 +85,8 @@ classdef Slap2DataFile < handle
         function cfg = loadConfig(filename)
             cfg = struct('numChannels', 1, 'frameSize', [40 40], ...
                 'roiRows', 11:30, 'roiCols', 11:30, ...
-                'shiftAfterLine', Inf, 'shift', [0 0], 'failOnCall', Inf);
+                'shiftAfterLine', Inf, 'shift', [0 0], 'failOnCall', Inf, ...
+                'firstLineTime', NaT);
             sidecar = [filename '.fake.mat'];
             if isfile(sidecar)
                 s = load(sidecar, 'cfg');

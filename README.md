@@ -120,8 +120,8 @@ Each experiment processed with GIAnT first gets a trial_table.h5 file that summa
  |  |     └ 📈 dmdPixel2SampleTransform
  |  ├ 🔢 first_line
  |  ├ 🔢 last_line
- |  ├ 🔢 trial_start_time_inferred
- |  └ 🔢 trial_end_time_from_pc
+ |  ├ 📈 trial_start_time_inferred
+ |  └ 📈 trial_end_time_from_pc
  ├ 📁 motion_correction
  |  ├ 🔤 fn_reg_ds
  |  ├ 🔤 fn_adata
@@ -310,8 +310,8 @@ A summary file of per-trial data is also saved as `per_trial_summary.h5` for any
 | `slap2_info/ref_stack/Path{1,2}/dmdPixel2SampleTransform` | 3 x 3 | numeric | Transformation matrix |
 | `slap2_info/first_line` | nPaths x total trials | integer | First line of each trial |
 | `slap2_info/last_line` | nPaths x total trials | integer | Last line of each trial |
-| `slap2_info/trial_start_time_inferred` | 1 x total trials | integer | Inferred trial start times |
-| `slap2_info/trial_end_time_from_pc` | 1 x total trials | integer | Trial end times from PC |
+| `slap2_info/trial_start_time_inferred` | 1 x total trials | numeric | Trial start times (MATLAB datenum), from the FPGA line timestamps when the data has them, otherwise inferred from file modification times |
+| `slap2_info/trial_end_time_from_pc` | 1 x total trials | numeric | Trial end times (MATLAB datenum), from the FPGA line timestamps when the data has them, otherwise from file modification times. Modification-time-based times are wrong for copied files (e.g. from S3); `buildTrialTableSLAP2` warns when they look like copy times |
 | `motion_correction` | — | group | Written by motion correction stage |
 | `motion_correction/fn_reg_ds` | nPaths x total trials | string | Registered + downsampled tif filename |
 | `motion_correction/fn_adata` | nPaths x total trials | string | Alignment metadata `_ALIGNMENTDATA.h5` filename |
