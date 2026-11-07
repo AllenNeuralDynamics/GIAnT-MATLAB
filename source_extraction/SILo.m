@@ -100,15 +100,14 @@ for DMDix = nDMDs:-1:1
     clear aData
     fprintf('[SILo timing] Path %d: metadata %.1f s\n', DMDix, toc(stageTimer));
 
-    %set up parallelization
+    %set up parallelization. One pool of worker processes (extractionPool)
+    %serves localization and extraction. Localization runs at most as many
+    %trials at once as fit in memory (parfor's worker limit), so the pool is
+    %not restarted at another size for each stage and imaging path
     stageTimer = tic;
+    nLocWorkers = 0; %0: localize on the client
     if params.nWorkers>1
-        p = gcp('nocreate');
-        if isempty(p)
-            poolsize = 0;
-        else
-            poolsize = p.NumWorkers;
-        end
+        pool = extractionPool(params);
         dd = dir(fullfile(mocodr, trialTable.motion_correction.fn_reg_ds{DMDix, firstValidTrial}));
         try
             fileSize = dd.bytes;
@@ -136,12 +135,12 @@ for DMDix = nDMDs:-1:1
             memAvailable = 8 * 1024^3;
         end
         maxWorkers = max(1,min(size(trialTable.filename,2), floor(0.13*memAvailable/fileSize)));
-        nWorkers = min(params.nWorkers, maxWorkers);
-        
-        if poolsize~=nWorkers ||  ~strcmpi(class(p), 'parallel.ProcessPool')
-            delete(gcp('nocreate'));
-            parpool('processes',nWorkers); %limit the number of workers to avoid running out of RAM
+        if isa(pool, 'parallel.ProcessPool')
+            nLocWorkers = min([params.nWorkers, maxWorkers, pool.NumWorkers]);
+        else
+            warning('SILo:noProcessPool', 'No pool of worker processes; localizing trials one at a time on the client');
         end
+        fprintf('Localizing up to %d trials at once\n', nLocWorkers);
     else
         delete(gcp('nocreate'));
     end
@@ -153,7 +152,7 @@ for DMDix = nDMDs:-1:1
     stageTimer = tic;
     mIM = cell(1, nTrials); aIM = cell(1,nTrials); alignData = cell(1, nTrials); peaks = cell(1, nTrials); discardFrames = cell(1,nTrials);
     fns = trialTable.motion_correction.fn_reg_ds(DMDix, :);
-    parfor trialIx = 1:nTrials
+    parfor (trialIx = 1:nTrials, nLocWorkers)
         if keepTrials(DMDix,trialIx)
             [~, mIM{trialIx}, aIM{trialIx}, alignData{trialIx}, peaks{trialIx}, discardFrames{trialIx}]= loadAndProcessTrialAsync(mocodr, fns{trialIx}, numChannels, params);
         end
