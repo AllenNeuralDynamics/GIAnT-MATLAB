@@ -108,15 +108,22 @@ for DMDix = nDMDs:-1:1
     nLocWorkers = 0; %0: localize on the client
     if params.nWorkers>1
         pool = extractionPool(params);
-        dd = dir(fullfile(mocodr, trialTable.motion_correction.fn_reg_ds{DMDix, firstValidTrial}));
+        %bytes of one channel of the registered movie, as single (h5 files may be compressed)
+        regFn = fullfile(mocodr, trialTable.motion_correction.fn_reg_ds{DMDix, firstValidTrial});
         try
-            fileSize = dd.bytes;
+            if endsWith(regFn, '.h5')
+                desc = h5info(regFn);
+                channelBytes = 4*prod(desc.Datasets(1).Dataspace.Size)/numChannels;
+            else
+                dd = dir(regFn);
+                channelBytes = dd.bytes/numChannels;
+            end
         catch
-            error(['Error loading registered tiff:' trialTable.motion_correction.fn_reg_ds{DMDix, firstValidTrial} '\n' 'Are paths in your trial table valid?']);
+            error(['Error loading registered movie:' trialTable.motion_correction.fn_reg_ds{DMDix, firstValidTrial} '\n' 'Are paths in your trial table valid?']);
         end
         if ispc
-            userMemInfo = memory;
-            memAvailable = userMemInfo.MemAvailableAllArrays;
+            [~, systemMemInfo] = memory;
+            memAvailable = systemMemInfo.PhysicalMemory.Available; %MemAvailableAllArrays counts the page file
         elseif ismac
             memAvailable = localMacMemAvailable();
         elseif exist('/proc/meminfo', 'file')
@@ -134,13 +141,17 @@ for DMDix = nDMDs:-1:1
                 'Could not determine available memory; assuming 8 GB.');
             memAvailable = 8 * 1024^3;
         end
-        maxWorkers = max(1,min(size(trialTable.filename,2), floor(0.13*memAvailable/fileSize)));
+        %a worker localizing a trial peaks at ~8x one channel's movie plus ~1 GB
+        %(measured: 780125 SLAP2 trials of 2.4 and 3.3 GB per channel, and a
+        %one-channel 2.1 GB simulation); allow 9x
+        bytesPerWorker = 9*channelBytes + 2^30;
+        maxWorkers = max(1,min(size(trialTable.filename,2), floor(memAvailable/bytesPerWorker)));
         if isa(pool, 'parallel.ProcessPool')
             nLocWorkers = min([params.nWorkers, maxWorkers, pool.NumWorkers]);
         else
             warning('SILo:noProcessPool', 'No pool of worker processes; localizing trials one at a time on the client');
         end
-        fprintf('Localizing up to %d trials at once\n', nLocWorkers);
+        fprintf('Localizing up to %d trials at once (%.0f GB available, %.1f GB per trial)\n', nLocWorkers, memAvailable/2^30, bytesPerWorker/2^30);
     else
         delete(gcp('nocreate'));
     end
