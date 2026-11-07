@@ -1,18 +1,24 @@
 function E = processAllTrials_Async(dr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, motOutput, roiData, validTrials, params)
 %subproblems run on a pool of worker processes (see extractionPool)
+poolTimer = tic;
 extractionPool(params);
+fprintf('[SILo timing] extraction pool %.1f s\n', toc(poolTimer));
 numDatasets = numel(fls);
 E = cell(numDatasets,1);
 minFrames = 100; %extractTrial initializes from the first 100 samples; shorter trials cannot be source-extracted
 pending = []; %trial whose extraction is still running
 for i = 1:numel(validTrials)
     nLoad = validTrials(i);
+    loadTimer = tic;
     CD = loadTrial(dr, fns{nLoad},fls(nLoad),els(nLoad),selPix,discardFrames{nLoad}, alignData{nLoad}, meanAligned(:,:,:,nLoad), motOutput(:,nLoad), roiData, params);
     E{nLoad}.ROIs = CD.ROIs; E{nLoad}.global = CD.global;
     E{nLoad}.discardFrames = CD.discardFrames;
     E{nLoad}.frameLines = CD.frameLines;
+    fprintf('[SILo timing] trial %d: load %.1f s\n', nLoad, toc(loadTimer));
     if ~isempty(pending) %we process the previous trial after loading the next, to keep CPU usage up during loading
+        waitTimer = tic;
         [E{pending}, B] = processResult(resultsFuture, E{pending},params);
+        fprintf('[SILo timing] trial %d: waited %.1f s for extraction\n', pending, toc(waitTimer));
         if isempty(E{pending})
             disp(['Error processing trial: ' int2str(pending) '\n Continuing...'])
         end
@@ -34,7 +40,9 @@ for i = 1:numel(validTrials)
 end
 
 if ~isempty(pending)
+    waitTimer = tic;
     [E{pending}, B] = processResult(resultsFuture,E{pending},params);
+    fprintf('[SILo timing] trial %d: waited %.1f s for extraction\n', pending, toc(waitTimer));
     if isempty(E{pending})
         disp(['Error processing trial: ' int2str(pending) '\n Continuing...'])
     end
