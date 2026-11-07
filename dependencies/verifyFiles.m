@@ -35,7 +35,7 @@ for trialIx = nTrials:-1:1
             if useRegFailTable
                 regFailed = trialTable.motion_correction.registration_failed(DMDix, trialIx);
             else
-                aData = loadStructFromH5([mocodr filesep alignFn '.h5']);
+                aData = loadStructFromH5([mocodr filesep alignFn '.h5'], '/slap2/varFacDS');
                 regFailed = isfield(aData, 'registrationFailed') && aData.registrationFailed;
                 clear aData
             end

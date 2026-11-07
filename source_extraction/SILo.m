@@ -82,7 +82,7 @@ for DMDix = nDMDs:-1:1
     %load some metadata
     stageTimer = tic;
     fn = trialTable.motion_correction.fn_adata{DMDix,firstValidTrial};
-    aData = loadStructFromH5(fullfile(mocodr, fn));
+    aData = loadStructFromH5(fullfile(mocodr, fn), '/slap2/varFacDS'); %metadata only
     numChannels = aData.numChannels;
     params.numChannels = numChannels;
     params.alignHz = aData.alignHz;
