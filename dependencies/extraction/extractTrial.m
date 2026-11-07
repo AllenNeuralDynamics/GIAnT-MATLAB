@@ -79,18 +79,18 @@ for problemIx = 1:nProblems %9
         if doParallel
             analysisFutures(problemIx) = parfeval(@extractSources, 6, Y_p, F_inv_p, sources_p, selPix_p, params, GTp);
         else
-            [Hi,Si,Bi, LSi, SNRi, errFinal] = extractSources(Y_p, F_inv_p, sources_p, selPix_p, params, GTp); %#ok<ASGLU>
+            [Hi,Si,F0i, LSi, SNRi, errFinal] = extractSources(Y_p, F_inv_p, sources_p, selPix_p, params, GTp); %#ok<ASGLU>
         end
     else
         if doParallel
             analysisFutures(problemIx) = parfeval(@extractSources, 5, Y_p, F_inv_p, sources_p, selPix_p, params);
         else
-            [Hi,Si,Bi, LSi, SNRi] = extractSources(Y_p, F_inv_p, sources_p, selPix_p, params); %#ok<ASGLU>
+            [Hi,Si,F0i, LSi, SNRi] = extractSources(Y_p, F_inv_p, sources_p, selPix_p, params); %#ok<ASGLU>
         end
     end
 
     if ~doParallel %process this problem now
-        %TODO: assemble Hi/Si/Bi/LSi/SNRi into H/B/S/LS/F0/SNR across problems
+        %TODO: assemble Hi/Si/F0i/LSi/SNRi into H/S/LS/F0/SNR across problems
         error('extractTrial:NonParallelNotImplemented', ...
             ['Non-parallel extractTrial assembly is not implemented. ', ...
              'Call with a single output argument to use the parallel futures path.']);
@@ -100,49 +100,37 @@ end
 if doParallel
     % Capture scale used for this trial (may have been estimated above).
     photonScale = params.photonScale;
-    varargout{1} = afterAll(analysisFutures,@(x)assembleResults(x, pxList_p, selIdxs, sourceList, numel(sources.R), size(Y_obs,2), photonScale),6, "PassFuture",true);
+    varargout{1} = afterAll(analysisFutures,@(x)assembleResults(x, pxList_p, selIdxs, sourceList, numel(sources.R), size(Y_obs,2), photonScale),5, "PassFuture",true);
 else
-    varargout = {H,B,S,LS,F0,SNR}; %#ok<USENS>
+    varargout = {H,S,LS,F0,SNR}; %#ok<USENS>
 end
 end
 
-function [H,B,S,LS,F0,SNR] = assembleResults(analysisFutures, pxList_p, selIdxs, sourceList, nSources, nTimepoints, photonScale)
-%assemble results
-%sz = CC.ImageSize;
+function [H,S,LS,F0,SNR] = assembleResults(analysisFutures, pxList_p, selIdxs, sourceList, nSources, nTimepoints, photonScale)
+%assemble results. Each subproblem returns its sources' F0 rather than its
+%pixels x time baseline, which was large to send back from the workers and unused
 nFutures = length(analysisFutures);
-%H = nan([sz nSources], 'single');
 for j = 1:nFutures
-    [idx, Hi,Si,Bi, LSi, SNRi] = fetchNext(analysisFutures);
+    [idx, Hi,Si,F0i, LSi, SNRi] = fetchNext(analysisFutures);
     if j==1
-        nChan = size(Bi,3);
+        nChan = size(F0i,3);
         H = nan(nnz(selIdxs>0),nSources, 'single');
-        B = nan(nnz(selIdxs>0), nTimepoints, nChan);
         S = nan(nSources, nTimepoints, nChan);
         LS = nan(nSources, nTimepoints, nChan);
         F0 = nan(nSources, nTimepoints, nChan);
         SNR = nan(nSources,1);
     end
 
-    %nj = size(Hi,2); %number of sources in this subproblem
     pxList = pxList_p{idx};
-    
-    %tmp = nan([prod(sz), nj]);
-    %tmp(pxList,:) = Hi;
-    %H(:,:,sourceList{idx}) = reshape(tmp, [sz nj]); %footprints
-    H(selIdxs(pxList),sourceList{idx}) = Hi;
-    B(selIdxs(pxList),:,:) = Bi; %background
-    
+    H(selIdxs(pxList),sourceList{idx}) = Hi; %footprints
     S(sourceList{idx},:,:) = Si; %spikes
     LS(sourceList{idx},:,:) = LSi; %least squares estimate
-    for chIx = 1:size(Bi,3)
-        F0(sourceList{idx},:,chIx) = (Hi'*Bi(:,:,chIx))./sum(Hi.^2,1)'; %F0 is weighted background
-    end
+    F0(sourceList{idx},:,:) = F0i; %weighted background
     SNR(sourceList{idx}) = SNRi;
 end
 
 % Restore movie fluorescence units (optimization ran in photon-normalized space).
 % H and SNR are scale-invariant / sum-normalized and are left unchanged.
-B = B .* photonScale;
 S = S .* photonScale;
 LS = LS .* photonScale;
 F0 = F0 .* photonScale;
@@ -151,7 +139,7 @@ end
 
 
 
-function [H_est,S_est_new, B_est, dFls, Xsnr, errFinal] = extractSources(Y_obs, Finv, sources, selPix, params, GT)
+function [H_est,S_est_new, F0, dFls, Xsnr, errFinal] = extractSources(Y_obs, Finv, sources, selPix, params, GT)
 %performs source extraction by alternating coordinate optimization on the
 %footprints (H,Hs), baseline (B), and source activities (S,X), in a constrained NMF framework
 
@@ -160,8 +148,9 @@ function [H_est,S_est_new, B_est, dFls, Xsnr, errFinal] = extractSources(Y_obs, 
 %selpix is a 2D logical map, containing [#selected pixels] true values, that maps Yobs to 2D space
 %params
 
-%outputs the superresolution source estimate (Hs), the superresolution
-%spikes (S), and the baseline (B)
+%outputs the source footprints (H), the superresolution spikes (S), the
+%footprint-weighted baseline of each source (F0), and the least-squares
+%activity (dFls)
 
 num_channels = size(Y_obs,3);
 if num_channels>1
@@ -401,9 +390,15 @@ if ~isempty(Y2) % two-channel recording, process calcium data with same source f
 
     %append channel 2 S,B,LS, and SNR as additional dimension
     S_est_new = cat(3, S_est_new, S2);
-    B_est = cat(3, B_est, B2); 
-    dFls = cat(3, dFls, LS2); 
+    B_est = cat(3, B_est, B2);
+    dFls = cat(3, dFls, LS2);
     %Xsnr = cat(2, Xsnr, X2snr);
+end
+
+%F0 is the footprint-weighted baseline
+F0 = nan(num_sources, num_time_points, size(B_est,3));
+for chIx = 1:size(B_est,3)
+    F0(:,:,chIx) = (H_est'*B_est(:,:,chIx))./sum(H_est.^2,1)';
 end
 
 end
