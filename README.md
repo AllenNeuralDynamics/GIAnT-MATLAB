@@ -80,6 +80,8 @@ MultiRoiRegistration;   % or BandRegistration
 SILo;                   % isSLAP2 = true
 ```
 
+**Extraction speed.** Source extraction solves its subproblems on a pool of worker processes (`params.nWorkers`, 12 by default; SILo's own pool is reused, and a thread pool is used if no process pool starts), and loads the next trial while the previous one is extracted. For SLAP2 data, the loader reads only the lines that sample the superpixels it needs. The activity fits use the Hessian in source space, are rescaled so the solver's first trust region spans the expected step, and precondition their conjugate-gradient steps with the Hessian's diagonal, so within the same iteration limits they come much closer to convergence. On a 16-core workstation (39 SLAP2 trials of about 5600 frames on each of two paths, 128–143 sources per path), extraction took 55–64 s per trial, against 462–550 s per trial before these changes, and the whole SILo run 1 h 51 min instead of 11 h 30 min.
+
 ## Epoch and analysis trial
 
 For each experiment we break the data into **epochs** and **analysis trials**.

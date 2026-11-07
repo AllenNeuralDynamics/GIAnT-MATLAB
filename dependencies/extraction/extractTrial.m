@@ -37,7 +37,7 @@ selIdxs(selPix) = 1:sum(selPix(:));
 if nargout==1
     doParallel = true;
     if isempty(gcp('nocreate'))
-        parpool('Threads'); % start pool if none
+        extractionPool(params); % start a pool of worker processes if none
     end
     analysisFutures = parallel.FevalFuture.empty(nProblems,0);
 else
@@ -244,14 +244,7 @@ for outerLoop = 1:params.nmfIter
     %SOLVE FOR S
     if doFitS
         opts.TypicalX = typicalX;
-        % Objective function handle (returns [f,g, Hinfo])
-        objS = @(x) objfun_S_wrapper(x, Y_obs, H_est, B_est, params.k, Finv, params.lambda);
-
-        % Hessian multiply for fmincon signature (x,y,flag)
-        opts.HessianMultiplyFcn = @(hinfo, v, flag) hessmult_S_wrapper(hinfo, Y_obs, H_est, B_est, params.k, Finv, params.lambda, v); %hessmult_S_wrapper takes (Svec, Z, H, B, k, F, lambda, v)
-
-        % Call fmincon
-        [S_est_new, lossS] = fmincon(objS, S_est, [], [], [], [], problemS.lb, problemS.ub, [], opts);
+        [S_est_new, lossS] = fitS(Y_obs, H_est, B_est, params.k, Finv, params.lambda, S_est, [], problemS.lb, problemS.ub, opts);
     else
         S_est_new = S_est;
     end
@@ -297,9 +290,9 @@ for outerLoop = 1:params.nmfIter
     %SOLVE FOR Hs
     if doFitH
         opts.TypicalX = max(H_est, 0.01);
-        % Objective function handle (returns [f,g, Hinfo])
-        objHs = @(Hs) objfun_Hs_wrapper(Hs, Y_obs, X_est_new, B_est, params.Hfilter, selPix, Finv, params.lambda); %(Hs_vec, Z, X, B, kk, selPix, F, lambda, v)
-        opts.HessianMultiplyFcn = @(Hinfo, v, flag) hessmult_Hs_wrapper(Hinfo, Y_obs, X_est_new, B_est, params.Hfilter,selPix, Finv, params.lambda, v);
+        % Objective (returns [f, g, Hinfo]) and Hessian multiply
+        objHs = @(Hs) objfun_Hs(Hs, Y_obs, X_est_new, B_est, params.Hfilter, selPix, Finv);
+        opts.HessianMultiplyFcn = @(Hinfo, v, flag) hessmult_Hs(Hinfo, params.Hfilter, selPix, v);
         % Call fmincon
         [Hs_est_new,lossH] = fmincon(objHs, Hs_est, [], [], [], [], problemH.lb, problemH.ub, [], opts);
     else
@@ -331,16 +324,12 @@ free = S_est_new >= 1e-1;
 S_est_new(~free) = 0;
 if any(free(:))
     free_idx = find(free);
-    szS = size(S_est_new);
     x0 = S_est_new(free);
     lambdaDebias = params.lambda * params.phi;
     optsDebias = opts;
     optsDebias.MaxIterations = 10*params.nmfIter;
     optsDebias.TypicalX = typicalX(free);
-    optsDebias.HessianMultiplyFcn = @(hinfo, v, varargin) ...
-        hessmult_S_free(hinfo, v, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
-    objS = @(x) objfun_S_free(x, free_idx, szS, Y_obs, H_est, B_est, params.k, Finv, lambdaDebias);
-    x = fmincon(objS, x0, [], [], [], [], problemS.lb(free), problemS.ub(free), [], optsDebias);
+    x = fitS(Y_obs, H_est, B_est, params.k, Finv, lambdaDebias, x0, free_idx, problemS.lb(free), problemS.ub(free), optsDebias);
     S_est_new(free) = x;
 end
 
@@ -372,27 +361,21 @@ if ~isempty(Y2) % two-channel recording, process calcium data with same source f
     B2 = max(params.minBaseline, splitFreq(Y2, params.denoiseWindow_samps, ceil(params.baselineWindow_samps/params.denoiseWindow_samps)));
     typicalX2 = sqrt(mean((Y2(:,1:100)-B2(:,1:100)).^2,'all'))*ones(num_sources,num_time_points);
     opts.TypicalX = typicalX2;
-    opts.HessianMultiplyFcn = @(hinfo, v, flag) hessmult_S_wrapper(hinfo, Y2, H_est, B2, params.k2, Finv, params.lambda, v); %hessmult_S_wrapper takes (Svec, Z, H, B, k, F, lambda, v)
     opts.MaxIterations = 15;
     LS2 = H_est\(Y2-B2);
-    objS = @(x) objfun_S_wrapper(x, Y2, H_est, B2, params.k2, Finv, params.lambda);
-    [S2, ~] = fmincon(objS, LS2, [], [], [], [], problemS.lb, problemS.ub, [], opts);
+    S2 = fitS(Y2, H_est, B2, params.k2, Finv, params.lambda, LS2, [], problemS.lb, problemS.ub, opts);
 
     % Debias channel 2 on its own support (separate from channel 1)
     free2 = S2 >= 1e-1;
     S2(~free2) = 0;
     if any(free2(:))
         free_idx2 = find(free2);
-        szS2 = size(S2);
         x0 = S2(free2);
         lambdaDebias = params.lambda * params.phi;
         optsDebias = opts;
         optsDebias.MaxIterations = 10*params.nmfIter;
         optsDebias.TypicalX = typicalX2(free2);
-        optsDebias.HessianMultiplyFcn = @(hinfo, v, varargin) ...
-            hessmult_S_free(hinfo, v, free_idx2, szS2, Y2, H_est, B2, params.k2, Finv, lambdaDebias);
-        objS = @(x) objfun_S_free(x, free_idx2, szS2, Y2, H_est, B2, params.k2, Finv, lambdaDebias);
-        x = fmincon(objS, x0, [], [], [], [], problemS.lb(free2), problemS.ub(free2), [], optsDebias);
+        x = fitS(Y2, H_est, B2, params.k2, Finv, lambdaDebias, x0, free_idx2, problemS.lb(free2), problemS.ub(free2), optsDebias);
         S2(free2) = x;
     end
     
@@ -413,8 +396,7 @@ if ~isempty(Y2) % two-channel recording, process calcium data with same source f
     % %Refit
     % B2 = fitB(B2, Y2,X2,H_est, Finv, selPix, params); %(Y,X, H, Finv, selPix, params)
     % LS2 = H_est\(Y2-B2);
-    % objS = @(x) objfun_S_wrapper(x, Y2, H_est, B2, params.k2, Finv, params.lambda);
-    % [S2, ~] = fmincon(objS, LS2, [], [], [], [], problemS.lb, problemS.ub, [], opts);
+    % S2 = fitS(Y2, H_est, B2, params.k2, Finv, params.lambda, LS2, [], problemS.lb, problemS.ub, opts);
     % X2 = convn(S2, params.k2, 'same'); %update X2
 
     %append channel 2 S,B,LS, and SNR as additional dimension
@@ -539,219 +521,180 @@ end
 
 
 
-function [f, gHs, HvHs] = objfun_Hs(Hs, Z, X, B, kk, selPix, F, lambda, v)
-% OBJFUN_HS  loss, gradient, and Hessian-vector product w.r.t Hs
+function [x, f] = fitS(Z, H, B, k, F, lambda, x0, free_idx, lb, ub, opts)
+%FITS fits the activity S (sources x time) with the footprints H and baseline B
+%held fixed, minimizing
+%   f = sum((Z - T).^2 ./ (F.*(T + 1)), 'all') + lambda*sum(S(:)),  T = H*convn(S, k, 'same') + B,
+%over all of S (free_idx = []), or over the entries free_idx only, the others
+%held at 0. x0, lb and ub are S's start and bounds (on the free entries only, if
+%given). opts are the fmincon options; their MaxIterations, MaxPCGIter,
+%tolerances and TypicalX are used.
 %
-% Usage:
-%   [f, gHs] = objfun_Hs_new(Hs, Z, X, B, kk, F, lambda);
-%   [~, ~, HvHs] = objfun_Hs_new(Hs, Z, X, B, kk, F, lambda, VHs);
-%
-% Inputs:
-%   Hs     : m-by-p matrix (optimization variable)
-%   Z, B, F: m-by-n matrices
-%   X      : p-by-n matrix
-%   kk     : 2D convolution kernel
-%   lambda : scalar (regularizer)
-%   VHs    : optional m-by-p perturbation for Hessian-vector product
-%
-% Outputs:
-%   f      : scalar loss
-%   gHs    : m-by-p gradient (dL/dHs)
-%   HvHs   : m-by-p Hessian-vector product (if VHs provided)
+%Every fit stops at its iteration cap, so it is made to go further per
+%iteration: the fits need steps of hundreds to thousands, while fmincon's trust
+%region starts at a radius of 10 and at most doubles per iteration. The fit is
+%therefore solved for S/sc, with sc a tenth of the length of the projected
+%Jacobi (diagonal Newton) step from x0, and its CG steps are preconditioned with
+%the Hessian's diagonal. (fmincon reads the preconditioner from the
+%undocumented Preconditioner field of optimset-style options; a release that
+%ignores it falls back to its own diagonal, and the fit still runs.)
+szS = [size(H, 2) size(Z, 2)];
+pr = sPairs(H, szS);
+objAll = @(S) objS(S, Z, H, B, k, F, lambda, pr);
+if isempty(free_idx)
+    obj = objAll;
+    hess = @(Q, V) hessS(Q, V, k, pr);
+    dg = @(Q) diagS(Q, k, pr);
+else
+    obj = @(x) freeObj(objAll, x, free_idx, szS);
+    hess = @(Q, V) freeHess(@(V) hessS(Q, V, k, pr), V, free_idx, szS);
+    dg = @(Q) selectFree(diagS(Q, k, pr), free_idx);
+end
+%the scale: a tenth of the projected Jacobi step from x0
+[~, g0, Q0] = obj(x0);
+h0 = dg(Q0); h0 = max(h0, eps * max(h0));
+step = min(max(-g0(:) ./ h0, lb(:) - x0(:)), ub(:) - x0(:));
+sc = max(1, norm(step) / 10);
+so = optimset('Algorithm', 'trust-region-reflective', 'GradObj', 'on', 'Hessian', 'user-supplied', ...
+    'HessMult', @(Q, V, varargin) sc^2 * hess(Q, V), 'Display', 'off', 'MaxPCGIter', opts.MaxPCGIter, ...
+    'MaxIter', opts.MaxIterations, 'TolFun', opts.OptimalityTolerance, 'TolX', opts.StepTolerance, ...
+    'TypicalX', opts.TypicalX / sc);
+so.TolFunValue = opts.FunctionTolerance; so.TolPCG = 0.1;
+so.Preconditioner = @(Q, bw, DM, DG, varargin) diagPrecon(sc^2 * dg(Q), DM, DG);
+[x, f] = fmincon(@(x) scaledObj(obj, x, sc), x0 / sc, [], [], [], [], lb / sc, ub / sc, [], so);
+x = x * sc;
+end
+
+function pr = sPairs(H, szS)
+%the source pairs (j <= l) whose footprints overlap, and the maps that hessS uses
+%to sum over them; the other pairs add nothing to the Hessian (their products
+%are below 1e-12 of the sources' own)
+A = abs(H); O = A.' * A; d = sqrt(diag(O));
+[pr.jj, pr.ll] = find(triu(O > 1e-12 * (d * d.')) | eye(size(O)));
+p = szS(1); nP = numel(pr.jj);
+pr.sz = szS;
+pr.HH = H(:, pr.jj) .* H(:, pr.ll);
+pr.self = find(pr.jj == pr.ll);   % one per source, in source order
+pr.off = find(pr.jj ~= pr.ll); pr.jo = pr.jj(pr.off);
+pr.Sj = sparse(1:nP, pr.jj, 1, nP, p);
+pr.Slo = sparse(1:numel(pr.off), pr.ll(pr.off), 1, numel(pr.off), p);
+end
+
+function [f, gS, Q] = objS(S, Z, H, B, k, F, lambda, pr)
+%fitS's loss and gradient at S; Q, its curvature summed over pixels,
+%H'*diag(coef(:,t))*H for each frame t (time x source pairs), is fmincon's
+%Hinfo, from which hessS forms the Hessian products on sources only
+X = convTime(S.', k).';
+T = H * X + B;
+E = Z - T;
+s = T + 1;
+f = sum( (E.^2) ./ (F .* s), 'all' ) + lambda .* sum(S(:));
+p_elem = - (2 .* E .* s + E.^2) ./ ( F .* (s.^2) );   % dL/dT
+gS = convTime((H.' * p_elem).', flip(k)).' + lambda;
+coef = 2 .* (Z + 1).^2 ./ ( F .* (s .* s .* s) );     % d2L/dT2; s.^3 is far slower
+Q = coef.' * pr.HH;
+end
+
+function HvS = hessS(Q, v, k, pr)
+%Hessian products of objS at the curvature Q; v's columns are in S's own
+%(sources x time) column-major layout, as fmincon passes them
+Qo = Q(:, pr.off);
+for rix = size(v,2):-1:1
+    Xt = convTime(reshape(v(:,rix), pr.sz).', k);   % time x sources
+    Yt = (Q .* Xt(:, pr.ll)) * pr.Sj + (Qo .* Xt(:, pr.jo)) * pr.Slo;
+    HvS(:,rix) = reshape(convTime(Yt, flip(k)).', [], 1);
+end
+end
+
+function d = diagS(Q, k, pr)
+%the diagonal of hessS, in S's column-major order: sum_u k(u)^2 Q_jj(t+u-c),
+%with c the centre of the (odd-length) kernel k
+d = reshape(convTime(Q(:, pr.self), flip(k(:).^2)).', [], 1);
+end
+
+function [R, pvec] = diagPrecon(d, DM, DG)
+%fmincon's preconditioner for its scaled CG system DM*Hess*DM + DG, from the
+%Hessian's diagonal d: fmincon applies it as R\(R'\r)
+n = size(DM, 1);
+m = full(diag(DM)).^2 .* d + full(diag(DG));
+R = spdiags(sqrt(max(m, eps * max(m))), 0, n, n);
+pvec = 1:n;
+end
+
+function [f, g, Q] = scaledObj(obj, x, sc)
+%obj in the scaled variable x = S/sc
+[f, g, Q] = obj(x * sc);
+g = sc * g;
+end
+
+function [f, g, Q] = freeObj(objAll, x, free_idx, szS)
+%loss on the free entries of S only (the others held at 0)
+S = zeros(szS); S(free_idx) = x;
+[f, gS, Q] = objAll(S);
+g = gS(free_idx);
+end
+
+function Hv = freeHess(hessAll, v, free_idx, szS)
+%Hessian products on the free entries of S only
+V = zeros(prod(szS), size(v, 2)); V(free_idx, :) = v;
+Hv = hessAll(V);
+Hv = Hv(free_idx, :);
+end
+
+function d = selectFree(d, free_idx)
+d = d(free_idx);
+end
+
+function [f, gHs, P] = objfun_Hs(Hs, Z, X, B, kk, selPix, F)
+%the H fit's loss and gradient in the superresolution footprints Hs (pixels x
+%sources), with H = Hs filtered by kk, T = H*X + B and
+%   f = sum((Z - T).^2 ./ (F.*(T + 1)), 'all');
+%P, its curvature summed over time for each pixel, X*diag(coef(m,:))*X'
+%(pixels x source pairs), is fmincon's Hinfo, for hessmult_Hs
 ns = size(Hs,2);
 selPix3D = repmat(selPix, 1,1,ns);
-
-% Forward: H from Hs
 tmp = zeros([size(selPix) ns]);
-tmp(repmat(selPix, 1, 1, ns)) = Hs;
+tmp(selPix3D) = Hs;
 tmp = convn(tmp, kk, 'same');
 tmp = reshape(tmp,[numel(selPix), ns]);
 H = tmp(selPix(:),:);
+T = H * X + B;
+E = Z - T;
+s = T + 1;
+f = sum( (E.^2) ./ (F .* s) , 'all' );
+gH = (- (2 .* E .* s + E.^2) ./ ( F .* (s.^2) )) * X.';
+tmp = zeros([size(selPix) ns]);
+tmp(selPix3D) = gH;
+tmp = convn(tmp, rot90(kk,2), 'same');
+gHs = reshape(tmp(selPix3D), size(Hs));
+coef = 2 .* (Z + 1).^2 ./ ( F .* (s .* s .* s) );
+[jj, ll] = find(triu(true(ns)));
+P = coef * (X(jj, :) .* X(ll, :)).';
+end
 
-T = H * X + B;               % m-by-n
-E = Z - T;                   % m-by-n
-s = T + 1;% lambda;              % m-by-n
-
-% Hessian-vector product (BUT NOT F and G)
-if nargin >= 9 && ~isempty(v)
-    for rix = size(v,2):-1:1
-        % Forward perturbation
-        tmp = zeros(size(selPix3D));
-        tmp(selPix3D) = v(:,rix);
-        tmp = convn(tmp, kk, 'same');
-        V = reshape(tmp(selPix3D), size(Hs));
-
-        % Perturbation in T
-        dT = V * X;                     % m-by-n
-        % coef = 2 .* (Z + lambda).^2 ./ ( F .* (s.^3) );   % m-by-n
-        coef = 2 .* (Z + 1).^2 ./ ( F .* (s.^3) );   % m-by-n
-        dp = coef .* dT;                % m-by-n
-
-        % Map back to H-space
-        HvH = dp * X.';                % m-by-p
-
-        %Backprop to Hs in real space
-        tmp = zeros(size(selPix3D));
-        tmp(selPix3D) = HvH;
-        tmp = convn(tmp, rot90(kk,2), 'same');
-        HvHs(:,rix) = tmp(selPix3D);
-    end
-    f = [];
-    gHs = [];
-else %loss and gradient
-    % Compute loss
-    denom = F .* s;              % m-by-n
-    f = sum( (E.^2) ./ denom , 'all' );
-
-    % Gradient wrt T
-    p = - (2 .* E .* s + E.^2) ./ ( F .* (s.^2) );  % m-by-n
-
-    % Gradient wrt H
-    gH = p * X.';                % m-by-p
-
-    % % Chain rule: gradient wrt Hs
-    tmp = zeros([size(selPix) ns]);
-    tmp(selPix3D) = gH;
+function HvHs = hessmult_Hs(P, kk, selPix, v)
+%H fit Hessian products, from objfun_Hs's per-pixel curvature P
+nP = size(P, 2); ns = round((sqrt(8*nP + 1) - 1) / 2);
+[jj, ll] = find(triu(true(ns))); off = jj ~= ll; jo = jj(off);
+Sj = sparse(1:nP, jj, 1, nP, ns); Slo = sparse(1:nnz(off), ll(off), 1, nnz(off), ns);
+selPix3D = repmat(selPix, 1,1,ns);
+for rix = size(v,2):-1:1
+    tmp = zeros(size(selPix3D));
+    tmp(selPix3D) = v(:,rix);
+    tmp = convn(tmp, kk, 'same');
+    V = reshape(tmp(selPix3D), [nnz(selPix) ns]);
+    HvH = (V(:, ll) .* P) * Sj + (V(:, jo) .* P(:, off)) * Slo;
+    tmp = zeros(size(selPix3D));
+    tmp(selPix3D) = HvH;
     tmp = convn(tmp, rot90(kk,2), 'same');
-    gHs = reshape(tmp(selPix3D), size(Hs));
-
-    HvHs = [];
+    HvHs(:,rix) = tmp(selPix3D);
 end
 end
 
-function [f, gHs, Hinfo] = objfun_Hs_wrapper(Hs, Z, X, B, kk, selPix, F, lambda)
-[f, gHs] = objfun_Hs(Hs, Z, X, B, kk, selPix, F, lambda);
-Hinfo = Hs;
-% if f<0 || ~isreal(gHs) || ~isreal(f)
-%     keyboard
-% end
-end
-
-function HvHs = hessmult_Hs_wrapper(Hs, Z, X, B, kk, selPix, F, lambda, v)
-[~,~,HvHs] = objfun_Hs(Hs, Z, X, B, kk, selPix, F, lambda, v);
-% if ~isreal(HvHs)
-%     keyboard
-% end
-end
-
-%%%%%
-%%%%%
-
-function [f, gS, HvS] = objfun_S(S, Z, H, B, k, F, lambda, v)
-% OBJFUN_S  loss, gradient, Hessian-vector product w.r.t. S
-%
-% S : p-by-n
-% Z,B,F : m-by-n
-% H : m-by-p
-% k : 1-D kernel (row or column) used in convn(S,k,'same')
-% lambda : scalar regularizer, roughly the scale of 1 photon
-% VS : optional p-by-n perturbation for Hv (same size as S)
-%
-% Outputs:
-%  f   : scalar loss
-%  gS  : p-by-n gradient dL/dS
-%  HvS : p-by-n Hessian-vector product (if VS provided), else []
-%
-% The loss:
-%   T = H * X + B,  X = convn(S, k, 'same')
-%   f = sum( (Z - T).^2 ./ (F .* (T + lambda)), 'all' )
-
-% Forward
-X = convn(S, k, 'same');   % p-by-n
-T = H * X + B;             % m-by-n
-E = Z - T;                 % m-by-n
-s = T + 1; %lambda;            % m-by-n
-
-% Hessian-vector product branch
-if nargin >= 8 && ~isempty(v)
-    for rix = size(v,2):-1:1
-        V = reshape(v(:,rix), size(S)); % fmincon passes v in S's own (sources x time) column-major layout
-
-        % Forward map of perturbation through conv: dX = convn(VS, k, 'same')
-        dX = convn(V, k, 'same');    % p-by-n
-
-        % Perturbation in T: dT = H * dX
-        dT = H * dX;                  % m-by-n
-
-        % Coefficient: coef = 2*(Z + lambda).^2 ./ (F .* s.^3)
-        % coef = 2 .* (Z + lambda).^2 ./ ( F .* (s.^3) );  % m-by-n
-        coef = 2 .* (Z + 1).^2 ./ ( F .* (s.^3) );  % m-by-n
-
-        % dp = coef .* dT
-        dp = coef .* dT;              % m-by-n
-
-        % Map back: tmp = H.' * dp  (p-by-n)
-        tmp = H.' * dp;              % p-by-n
-
-        % Back through conv adjoint: HvS = convn(tmp, kflip, 'same')
-        conv_adj = convn(tmp, flip(k), 'same');  % p-by-n
-        HvS(:,rix) = conv_adj(:);
-    end
-    f = [];
-    gS = [];
-else
-    % Objective value
-    denom = F .* s;            % m-by-n
-    f = sum( (E.^2) ./ denom, 'all' ) + lambda .* sum(S(:));
-
-    % Gradient wrt T (elementwise)
-    % p_elem = dL/dT = - (2 E s + E.^2) ./ (F .* s.^2)
-    p_elem = - (2 .* E .* s + E.^2) ./ ( F .* (s.^2) );  % m-by-n
-
-    % Gradient wrt X: gX = H.' * p_elem   (p-by-n)
-    gX = H.' * p_elem;        % p-by-n
-
-    % Gradient wrt S: adjoint of convn => convn(gX, flip(k), 'same')
-    gS = convn(gX, flip(k), 'same') + lambda;  % p-by-n
-
-    HvS = [];
-end
-end
-
-function [f, gS, Hinfo] = objfun_S_wrapper(S, Z, H, B, k, F, lambda)
-[f, gS] = objfun_S(S, Z, H, B, k, F, lambda); %objfun_S takes (S, Z, H, B, k, F, lambda, v)
-Hinfo = S; %Hessian depends on S
-% if f<0 || ~isreal(gS) || ~isreal(f)
-%     keyboard
-% end
-end
-
-function HvS = hessmult_S_wrapper(S, Z, H, B, k, F, lambda, v)
-% Svec : current S flattened
-% p = size(H,2);
-% n = size(Z,2);
-% S = reshape(S, p, n); %perhaps unnecessary?
-
-[~,~,HvS] = objfun_S(S, Z, H, B, k, F, lambda, v);
-% if ~isreal(HvS)
-%     keyboard
-% end
-end
-
-function [f, g, Hinfo] = objfun_S_free(x, free_idx, szS, Z, H, B, k, F, lambda)
-%OBJFUN_S_FREE Objective on free S entries only (scatter/gather into full S).
-S = zeros(szS);
-S(free_idx) = x;
-[f, gS] = objfun_S(S, Z, H, B, k, F, lambda);
-g = gS(free_idx);
-Hinfo = S;
-end
-
-function Hv = hessmult_S_free(Hinfo, v, free_idx, szS, Z, H, B, k, F, lambda)
-%HESSMULT_S_FREE Hessian-vector product on free S entries only.
-nv = size(v, 2);
-Vfull = zeros(prod(szS), nv);
-for j = 1:nv
-    tmp = zeros(szS);
-    tmp(free_idx) = v(:, j);
-    Vfull(:, j) = tmp(:);
-end
-HvFull = hessmult_S_wrapper(Hinfo, Z, H, B, k, F, lambda, Vfull);
-Hv = zeros(numel(free_idx), nv);
-for j = 1:nv
-    tmp = reshape(HvFull(:, j), szS);
-    Hv(:, j) = tmp(free_idx);
-end
+function yt = convTime(xt, k)
+%convn(x, k, 'same') along time, for x given as time x sources (xt = x.');
+%conv2 down columns is much faster than convn along rows
+yt = conv2(xt, k(:), 'same');
 end
 
 function Xfloor = computeFloor(X, denoiseWindow, baseline)
