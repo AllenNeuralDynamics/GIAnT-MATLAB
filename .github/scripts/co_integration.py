@@ -1,138 +1,174 @@
-"""Run the GIAnT-MATLAB Code Ocean integration capsule at a commit and check its results."""
+"""Run a Code Ocean integration pipeline at a commit and report its verdict.
+
+Contract with the pipeline:
+
+- It accepts the commit under test as a named parameter (``--commit-param``).
+- Its final step writes ``integration_verdict.json`` at the root of its results::
+
+      {
+        "schema_version": 1,
+        "status": "pass" | "fail" | "error",
+        "commit": "<commit that ran>",
+        "summary": "<optional one line for the pull request>",
+        "datasets": [{"name": "...", "status": "pass" | "fail" | "error", "message": "..."}]
+      }
+
+  ``fail`` means it ran and a check failed; ``error`` means something could not run.
+- It exits 0 if and only if ``status`` is ``pass``.
+
+The check passes when the pipeline exits 0, the verdict status is ``pass``, and the
+verdict commit matches the commit under test. A missing or unreadable verdict is an error.
+"""
 
 import argparse
 import json
 import os
 import sys
+import urllib.error
 import urllib.request
 
 from codeocean import CodeOcean
-from codeocean.computation import (
-    ComputationEndStatus,
-    ComputationState,
-    DataAssetsRunParam,
-    RunParams,
-)
+from codeocean.computation import ComputationState, NamedRunParam, RunParams
+from codeocean.error import Error as CodeOceanError
 
 CO_DOMAIN = "https://codeocean.allenneuraldynamics.org"
-POLL_SECONDS = 30
-COMMIT_FILE = "giant_commit.txt"
-TRIAL_TABLE_FILE = "trial_table.h5"
-SUMMARY_FILE = "smoke_test.json"
+POLL_SECONDS = 60
 LOG_FILE = "output"
+VERDICT_FILE = "integration_verdict.json"
+SCHEMA_VERSION = 1
+PASS = "pass"
 LOG_TAIL_LINES = 40
 
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--giant-sha", required=True, help="GIAnT-MATLAB commit to test.")
-    parser.add_argument("--capsule-id", required=True, help="Integration capsule id.")
-    parser.add_argument(
-        "--session-asset-id",
-        default=None,
-        help="Raw SLAP2 session data asset id; omit to use the data attached to the capsule.",
-    )
-    parser.add_argument("--timeout-minutes", type=float, default=60, help="Maximum run time to wait.")
+    parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("--pipeline-id", required=True, help="Code Ocean pipeline id.")
+    parser.add_argument("--commit", required=True, help="Commit under test.")
+    parser.add_argument("--commit-param", default="giant_ref", help="Pipeline parameter that receives the commit.")
+    parser.add_argument("--timeout-minutes", type=float, default=330, help="Maximum run time to wait.")
     return parser.parse_args()
 
 
-def read_result_text(client: CodeOcean, computation_id: str, path: str) -> str:
-    """Return the text of one result file."""
-    url = client.computations.get_result_file_urls(computation_id, path).download_url
-    with urllib.request.urlopen(url) as response:
-        return response.read().decode()
-
-
-def check_results(client: CodeOcean, computation_id: str, giant_sha: str) -> tuple[list[str], dict]:
-    """Return failed-check messages and the parsed smoke-test summary."""
-    failures = []
-    sizes = {item.path: item.size for item in client.computations.list_computation_results(computation_id).items}
-
-    for name in (COMMIT_FILE, TRIAL_TABLE_FILE, SUMMARY_FILE):
-        if not sizes.get(name):
-            failures.append(f"missing or empty result: {name}")
-
-    if sizes.get(COMMIT_FILE):
-        ran = read_result_text(client, computation_id, COMMIT_FILE).strip()
-        if ran != giant_sha:
-            failures.append(f"capsule ran GIAnT-MATLAB {ran}, expected {giant_sha}")
-
-    summary = {}
-    if sizes.get(SUMMARY_FILE):
-        summary = json.loads(read_result_text(client, computation_id, SUMMARY_FILE))
-    return failures, summary
-
-
-def log_tail(client: CodeOcean, computation_id: str) -> str:
-    """Return the last lines of the capsule's output log, or a note when it is unavailable."""
+def read_result(client: CodeOcean, computation_id: str, path: str) -> str | None:
+    """Return the text of a result file, or None when it cannot be read."""
     try:
-        text = read_result_text(client, computation_id, LOG_FILE)
-    except Exception as error:
-        return f"log unavailable: {error}"
-    return "\n".join(text.splitlines()[-LOG_TAIL_LINES:])
+        url = client.computations.get_result_file_urls(computation_id, path).download_url
+        with urllib.request.urlopen(url) as response:
+            return response.read().decode()
+    except (CodeOceanError, urllib.error.URLError):
+        return None
 
 
-def write_step_summary(lines: list[str]) -> None:
-    """Append lines to the GitHub Actions job summary when running in Actions."""
+def start_run(client: CodeOcean, args: argparse.Namespace):
+    """Start the pipeline and confirm Code Ocean recorded the commit parameter."""
+    computation = client.computations.run_capsule(
+        RunParams(
+            pipeline_id=args.pipeline_id,
+            named_parameters=[NamedRunParam(param_name=args.commit_param, value=args.commit)],
+        )
+    )
+    recorded = {p.param_name: p.value for p in computation.parameters or [] if p.param_name}
+    if recorded.get(args.commit_param) != args.commit:
+        raise SystemExit(
+            f"Code Ocean recorded {args.commit_param}={recorded.get(args.commit_param)!r}, expected "
+            f"{args.commit!r}; check the parameter name in the pipeline's app panel."
+        )
+    return computation
+
+
+def run_failures(computation) -> list[str]:
+    """Return why the run itself failed; empty when it completed with exit code 0."""
+    if computation.state != ComputationState.Completed:
+        return [f"computation state is {computation.state.value}"]
+    if computation.exit_code != 0:
+        return [f"pipeline exited with code {computation.exit_code}"]
+    return []
+
+
+def parse_verdict(text: str | None) -> tuple[dict | None, list[str]]:
+    """Return the verdict and any contract violations in it."""
+    if text is None:
+        return None, [f"{VERDICT_FILE} is missing"]
+    try:
+        verdict = json.loads(text)
+    except json.JSONDecodeError as error:
+        return None, [f"{VERDICT_FILE} is not valid JSON: {error}"]
+    if not isinstance(verdict, dict):
+        return None, [f"{VERDICT_FILE} is not a JSON object"]
+    if verdict.get("schema_version") != SCHEMA_VERSION:
+        return verdict, [f"{VERDICT_FILE} schema_version is {verdict.get('schema_version')!r}, expected {SCHEMA_VERSION}"]
+    return verdict, []
+
+
+def verdict_failures(verdict: dict, commit: str) -> list[str]:
+    """Return failures stated by or implied by the verdict."""
+    failures = []
+    if verdict.get("status") != PASS:
+        failures.append(f"verdict status is {verdict.get('status')!r}")
+    if verdict.get("commit") != commit:
+        failures.append(f"pipeline ran commit {verdict.get('commit')!r}, expected {commit!r}")
+    return failures
+
+
+def dataset_table(datasets: list) -> list[str]:
+    """Return a markdown table of per-dataset results."""
+    rows = [d for d in datasets if isinstance(d, dict)]
+    if not rows:
+        return []
+    lines = ["", "| Dataset | Status | Message |", "| --- | --- | --- |"]
+    for d in rows:
+        message = str(d.get("message", "")).replace("|", "\\|").replace("\n", " ")
+        lines.append(f"| {d.get('name', '?')} | {d.get('status', '?')} | {message} |")
+    return lines
+
+
+def write_step_summary(text: str) -> None:
+    """Append text to the GitHub Actions job summary when running in Actions."""
     path = os.environ.get("GITHUB_STEP_SUMMARY")
     if path:
         with open(path, "a") as f:
-            f.write("\n".join(lines) + "\n")
+            f.write(text + "\n")
 
 
 def main() -> int:
-    """Run the capsule, wait for it, and return a process exit code."""
+    """Run the pipeline, wait for it, report, and return a process exit code."""
     args = parse_args()
     client = CodeOcean(domain=CO_DOMAIN, token=os.environ["CODEOCEAN_TOKEN"])
+    slug = client.capsules.get_capsule(args.pipeline_id).slug
 
-    data_assets = None
-    if args.session_asset_id:
-        mount = client.data_assets.get_data_asset(args.session_asset_id).mount
-        data_assets = [DataAssetsRunParam(id=args.session_asset_id, mount=mount)]
-    computation = client.computations.run_capsule(
-        RunParams(
-            capsule_id=args.capsule_id,
-            data_assets=data_assets,
-            parameters=["--giant_sha", args.giant_sha],
-        )
-    )
-    run_url = f"{CO_DOMAIN}/capsule/{client.capsules.get_capsule(args.capsule_id).slug}/tree"
-    print(f"Started computation {computation.id} for GIAnT-MATLAB {args.giant_sha}", flush=True)
+    computation = start_run(client, args)
+    run_url = f"{CO_DOMAIN}/capsule/{slug}/tree?results={computation.id}_computation"
+    print(f"Started computation {computation.id} for {args.commit}: {run_url}", flush=True)
 
+    verdict = None
     try:
         computation = client.computations.wait_until_completed(
             computation, polling_interval=POLL_SECONDS, timeout=args.timeout_minutes * 60
         )
     except TimeoutError:
-        failures = [f"computation did not finish within {args.timeout_minutes} minutes"]
-        summary = {}
+        failures = [f"pipeline did not finish within {args.timeout_minutes} minutes"]
     else:
-        failures = []
-        if computation.state != ComputationState.Completed:
-            failures.append(f"computation state is {computation.state.value}")
-        if computation.end_status != ComputationEndStatus.Succeeded:
-            status = computation.end_status.value if computation.end_status else None
-            failures.append(f"computation end status is {status}")
-        # Code Ocean reports end_status "succeeded" even when the capsule exits nonzero.
-        if computation.exit_code != 0:
-            failures.append(f"capsule exited with code {computation.exit_code}")
-        result_failures, summary = check_results(client, computation.id, args.giant_sha)
-        failures.extend(result_failures)
+        failures = run_failures(computation)
+        verdict, contract_failures = parse_verdict(read_result(client, computation.id, VERDICT_FILE))
+        failures += contract_failures
+        if verdict is not None and not contract_failures:
+            failures += verdict_failures(verdict, args.commit)
 
-    verdict = "failed" if failures else "passed"
-    lines = [
-        f"## Code Ocean integration check {verdict}",
-        f"- GIAnT-MATLAB commit: `{args.giant_sha}`",
-        f"- Computation: `{computation.id}` ([capsule]({run_url}))",
-    ]
-    lines += [f"- Failure: {message}" for message in failures]
-    if summary:
-        lines += ["", "```json", json.dumps(summary, indent=2), "```"]
+    lines = [f"## Code Ocean integration check {'failed' if failures else 'passed'}"]
+    if verdict and verdict.get("summary"):
+        lines.append(str(verdict["summary"]))
+    lines += [f"- Commit: `{args.commit}`", f"- Run: [{computation.id}]({run_url})"]
+    lines += [f"- Failure: {f}" for f in failures]
+    if verdict:
+        lines += dataset_table(verdict.get("datasets", []))
     if failures:
-        lines += ["", "Capsule log (tail):", "```", log_tail(client, computation.id), "```"]
-    write_step_summary(lines)
-    print("\n".join(lines))
+        log = read_result(client, computation.id, LOG_FILE) or "log unavailable"
+        lines += ["", "Pipeline log (tail):", "```", *log.splitlines()[-LOG_TAIL_LINES:], "```"]
+
+    text = "\n".join(lines)
+    print(text)
+    write_step_summary(text)
     return 1 if failures else 0
 
 

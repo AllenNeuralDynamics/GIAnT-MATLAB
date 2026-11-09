@@ -2,8 +2,8 @@ name: Code Ocean integration
 
 # Runs pull-request code in Code Ocean, never on the runner. A maintainer adds the
 # `run-integration-test` label to approve each run; the label is removed when the run starts,
-# so every new commit needs a fresh approval. Each data asset in
-# .github/co-integration-assets.json gets its own Code Ocean run and check.
+# so every new commit needs a fresh approval. The result is set as the
+# `Code Ocean integration` commit status on the commit under test.
 on:
   pull_request_target:
     types: [labeled]
@@ -17,47 +17,36 @@ on:
 permissions:
   contents: read
   pull-requests: write
+  statuses: write
 
 concurrency:
   group: co-integration-${{ github.event.pull_request.number || inputs.giant_sha }}
   cancel-in-progress: true
 
+env:
+  STATUS_CONTEXT: Code Ocean integration
+
 jobs:
-  list-assets:
+  code-ocean:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-integration-test'
     runs-on: ubuntu-latest
-    outputs:
-      assets: ${{ steps.assets.outputs.assets }}
+    timeout-minutes: 360
+    env:
+      GIANT_SHA: ${{ github.event.pull_request.head.sha || inputs.giant_sha }}
+      GH_TOKEN: ${{ github.token }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
       - name: Remove approval label
         if: github.event_name == 'pull_request_target'
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: gh pr edit ${{ github.event.pull_request.number }} --repo ${{ github.repository }} --remove-label run-integration-test
 
-      # pull_request_target checks out the base branch, so pull-request code and asset lists never reach the runner.
-      - name: Check out asset list
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/co-integration-assets.json
-          sparse-checkout-cone-mode: false
+      - name: Set pending status
+        run: >
+          gh api "repos/${{ github.repository }}/statuses/$GIANT_SHA"
+          -f state=pending -f context="$STATUS_CONTEXT" -f target_url="$RUN_URL"
+          -f description="Running in Code Ocean"
 
-      - name: Read asset ids
-        id: assets
-        run: echo "assets=$(jq -c . .github/co-integration-assets.json)" >> "$GITHUB_OUTPUT"
-
-  code-ocean:
-    needs: list-assets
-    name: code-ocean (${{ matrix.asset.asset_id }})
-    runs-on: ubuntu-latest
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        asset: ${{ fromJSON(needs.list-assets.outputs.assets) }}
-    env:
-      GIANT_SHA: ${{ github.event.pull_request.head.sha || inputs.giant_sha }}
-    steps:
+      # pull_request_target checks out the base branch, so pull-request code never reaches the runner.
       - name: Check out scripts
         uses: actions/checkout@v4
         with:
@@ -65,13 +54,25 @@ jobs:
 
       - uses: astral-sh/setup-uv@v6
 
-      - name: Run integration capsule
+      - name: Run integration pipeline
         env:
           CODEOCEAN_TOKEN: ${{ secrets.CODEOCEAN_TOKEN }}
-          SESSION_ASSET_ID: ${{ matrix.asset.asset_id }}
         run: >
           uv run --no-project --with codeocean==0.17.0
           .github/scripts/co_integration.py
-          --giant-sha "$GIANT_SHA"
-          --capsule-id "${{ vars.CO_INTEGRATION_TEST_CAPSULE_ID }}"
-          --session-asset-id "$SESSION_ASSET_ID"
+          --pipeline-id "${{ vars.CO_INTEGRATION_TEST_PIPELINE_ID }}"
+          --commit "$GIANT_SHA"
+
+      - name: Set final status
+        if: always()
+        env:
+          JOB_STATUS: ${{ job.status }}
+        run: |
+          case "$JOB_STATUS" in
+            success) state=success; description="Passed in Code Ocean" ;;
+            failure) state=failure; description="Failed in Code Ocean" ;;
+            *) state=error; description="Check did not finish ($JOB_STATUS)" ;;
+          esac
+          gh api "repos/${{ github.repository }}/statuses/$GIANT_SHA" \
+            -f state="$state" -f context="$STATUS_CONTEXT" -f target_url="$RUN_URL" \
+            -f description="$description"
