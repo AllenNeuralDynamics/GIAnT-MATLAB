@@ -14,7 +14,8 @@ Contract with the pipeline:
       }
 
   ``fail`` means it ran and a check failed; ``error`` means something could not run.
-- It exits 0 if and only if ``status`` is ``pass``.
+- It exits nonzero when it cannot finish. It may exit 0 with a ``fail`` verdict, since a
+  failing final step can stop Nextflow from publishing the verdict.
 
 The check passes when the pipeline exits 0, the verdict status is ``pass``, and the
 verdict commit matches the commit under test. A missing or unreadable verdict is an error.
