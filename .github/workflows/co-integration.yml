@@ -10,8 +10,8 @@ on:
     branches: [main]
   workflow_dispatch:
     inputs:
-      giant_sha:
-        description: GIAnT-MATLAB commit to test
+      test_commit:
+        description: Commit to test
         required: true
 
 permissions:
@@ -20,7 +20,7 @@ permissions:
   statuses: write
 
 concurrency:
-  group: co-integration-${{ github.event.pull_request.number || inputs.giant_sha }}
+  group: co-integration-${{ github.event.pull_request.number || inputs.test_commit }}
   cancel-in-progress: true
 
 env:
@@ -32,7 +32,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
-      GIANT_SHA: ${{ github.event.pull_request.head.sha || inputs.giant_sha }}
+      TEST_COMMIT: ${{ github.event.pull_request.head.sha || inputs.test_commit }}
       GH_TOKEN: ${{ github.token }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:
@@ -42,7 +42,7 @@ jobs:
 
       - name: Set pending status
         run: >
-          gh api "repos/${{ github.repository }}/statuses/$GIANT_SHA"
+          gh api "repos/${{ github.repository }}/statuses/$TEST_COMMIT"
           -f state=pending -f context="$STATUS_CONTEXT" -f target_url="$RUN_URL"
           -f description="Running in Code Ocean"
 
@@ -61,7 +61,7 @@ jobs:
           uv run --no-project --with codeocean==0.17.0
           .github/scripts/co_integration.py
           --pipeline-id "${{ vars.CO_INTEGRATION_TEST_PIPELINE_ID }}"
-          --commit "$GIANT_SHA"
+          --commit "$TEST_COMMIT"
 
       - name: Set final status
         if: always()
@@ -73,6 +73,6 @@ jobs:
             failure) state=failure; description="Failed in Code Ocean" ;;
             *) state=error; description="Check did not finish ($JOB_STATUS)" ;;
           esac
-          gh api "repos/${{ github.repository }}/statuses/$GIANT_SHA" \
+          gh api "repos/${{ github.repository }}/statuses/$TEST_COMMIT" \
             -f state="$state" -f context="$STATUS_CONTEXT" -f target_url="$RUN_URL" \
             -f description="$description"

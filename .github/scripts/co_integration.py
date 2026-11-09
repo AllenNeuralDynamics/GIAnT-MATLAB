@@ -45,7 +45,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--pipeline-id", required=True, help="Code Ocean pipeline id.")
     parser.add_argument("--commit", required=True, help="Commit under test.")
-    parser.add_argument("--commit-param", default="giant_ref", help="Pipeline parameter that receives the commit.")
+    parser.add_argument("--commit-param", default="test_commit", help="Pipeline parameter that receives the commit.")
     parser.add_argument("--timeout-minutes", type=float, default=330, help="Maximum run time to wait.")
     return parser.parse_args()
 
