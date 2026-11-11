@@ -14,7 +14,9 @@ function roiEntry = roisToConsensusFrame(roiEntry, fnRegDS, motOutput, targetSz)
 % targetSz  - [rows cols] of the consensus frame
 %
 % If the annotation trial cannot be identified, or was not aligned (NaN
-% offset), the ROIs are returned unchanged with a warning.
+% offset), the ROIs are not shifted, with a warning. Their masks are still
+% cropped or padded to targetSz: soma exclusion and the experiment summary
+% index them on the consensus frame and fail on any other size.
 
 if ~isfield(roiEntry, 'roiData') || isempty(roiEntry.roiData)
     return
@@ -28,16 +30,15 @@ trialIx = find(strcmp(stems, annName), 1);
 if isempty(trialIx)
     trialIx = find(strcmp(stems, name), 1);
 end
+offset = [0; 0];
 if isempty(annName) || isempty(trialIx)
     warning('roisToConsensusFrame:UnknownTrial', ...
         'Annotation trial "%s" is not in the trial table; using its ROIs without cross-trial alignment.', annName);
-    return
-end
-offset = motOutput(:, trialIx);
-if any(~isfinite(offset))
+elseif any(~isfinite(motOutput(:, trialIx)))
     warning('roisToConsensusFrame:TrialNotAligned', ...
         'Annotation trial "%s" was not aligned across trials; using its ROIs without cross-trial alignment.', annName);
-    return
+else
+    offset = motOutput(:, trialIx);
 end
 roiEntry.roiData = shiftRoiData(roiEntry.roiData, -offset(:)', targetSz);
 end

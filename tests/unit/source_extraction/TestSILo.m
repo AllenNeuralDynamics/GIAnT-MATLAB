@@ -224,6 +224,35 @@ classdef TestSILo < matlab.unittest.TestCase
             testCase.verifyFalse(isfield(es, 'Path2'));
         end
 
+        function testFitsUnalignedUserRoisToConsensusFrame(testCase)
+            % ROIs annotated on a trial that is not in the trial table are
+            % used unshifted, with a warning. Their masks, drawn here on a
+            % larger image, must still be cropped to the consensus frame, or
+            % soma exclusion and the experiment summary fail on the size.
+            testCase.writeDataset(1);
+            mask = false(testCase.CropSize + 10);
+            mask(2:5, 3:6) = true;
+            mask(end-2:end, end-2:end) = true; %outside the consensus frame
+            roi = struct('Type', 'polygon', 'Label', 'SOMA', 'mask', mask, ...
+                'Position', [3 2; 6 2; 6 5; 3 5]);
+            ann = struct('dr', testCase.MocoDr, 'fn', 'not_a_trial', 'roiData', {{roi}});
+            annDr = fullfile(testCase.SaveDr, 'annotations');
+            mkdir(annDr);
+            saveAnnotationsH5(fullfile(annDr, 'annotations.h5'), ann);
+
+            testCase.verifyWarning(@() testCase.runSILo(testCase.Dr, ...
+                struct('drawUserRois', true, 'allowAnnotationGUI', false)), ...
+                'roisToConsensusFrame:UnknownTrial');
+
+            args = testCase.loadExtractorArgs();
+            frameSz = size(args.selPix, [1 2]);
+            expected = false(frameSz);
+            expected(2:5, 3:6) = true;
+            testCase.verifyEqual(args.roiData{1}.mask, expected);
+            es = loadStructFromH5(fullfile(testCase.SaveDr, 'source_extraction', 'experiment_summary.h5'));
+            testCase.verifyEqual(logical(squeeze(es.Path1.user_rois.mask)), expected);
+        end
+
         function testErrorsWhenAllTrialsMissing(testCase)
             testCase.writeDataset(1);
             for t = 1:testCase.NumTrials
