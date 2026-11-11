@@ -14,29 +14,33 @@ dShift = round(dShift(1)); %sanity check
 
 template = circshift(template, shiftsCenter);
 
-fValid = ~isnan(frame); %valid pixels of the fixed image
-[Fr0,Fc0] = find(fValid);
+fIdx = find(~isnan(frame)); %valid pixels of the fixed image, column-major
+[Fr0,Fc0] = ind2sub(sz, fIdx);
+F0 = frame(fIdx); Ff0 = freshness(fIdx);
 
 %correlation is sum(A.*B)./(sqrt(ssA)*sqrt(ssB)); ssB is constant though
+%For each shift, the valid frame pixels whose shifted template pixel is inside
+%the image and not NaN, in column-major order; their template pixels are at
+%linear index fIdx + dr + dc*sz(1)
 shifts =  -dShift:dShift;
+inC = cell(size(shifts));
+for dcix = 1:length(shifts)
+    inC{dcix} = Fc0+shifts(dcix)>=1 & Fc0+shifts(dcix)<=sz(2);
+end
 C = nan(length(shifts), length(shifts));
 for drix = 1:length(shifts)
+    inR = Fr0+shifts(drix)>=1 & Fr0+shifts(drix)<=sz(1);
     for dcix = 1:length(shifts)
-        Tr = Fr0 + shifts(drix);
-        Tc = Fc0 + shifts(dcix);
-        
-        valid = Tr>=1 & Tr<=size(template,1) & Tc>=1 & Tc<=size(template,2);
-        Fr=Fr0(valid); Fc=Fc0(valid); Tr=Tr(valid); Tc=Tc(valid);
-        
-        T = template(sub2ind(sz, Tr,Tc));
+        valid = inR & inC{dcix};
+        T = template(fIdx(valid) + (shifts(drix) + shifts(dcix)*sz(1)));
         sel = ~isnan(T); T = T(sel);
-        indsF = sub2ind(sz, Fr(sel),Fc(sel));
-        F = frame(indsF);
-        Ff = freshness(indsF);
+        F = F0(valid); F = F(sel);
+        Ff = Ff0(valid); Ff = Ff(sel);
 
-        sFT = sum(Ff.*(F-mean(F)).*(T-mean(T))); %./sum(Ff);
-        sT = mean((T-mean(T)).^2); 
-        sF = sum(Ff.*(F-mean(F)).^2); %./sum(Ff);
+        dF = F-mean(F); dT = T-mean(T);
+        sFT = sum(Ff.*dF.*dT); %./sum(Ff);
+        sT = mean(dT.^2);
+        sF = sum(Ff.*dF.^2); %./sum(Ff);
         C(drix,dcix) = sFT./sqrt(sT.*sF.*sum(Ff));
     end
 end
