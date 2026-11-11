@@ -17,11 +17,15 @@ Tested from **MATLAB R2023b** onward.
 * Signal Processing Toolbox
 * Statistics and Machine Learning Toolbox
 
-Clone this repository and add it (and its subfolders) to the MATLAB path:
+Clone this repository and add it and its subfolders to the MATLAB path, leaving out `tests/`:
 
 ```matlab
-addpath(genpath('/path/to/GIAnT-MATLAB'));
+repo = '/path/to/GIAnT-MATLAB';
+p = strsplit(genpath(repo), pathsep);
+addpath(strjoin(p(~startsWith(p, [repo filesep 'tests'])), pathsep));
 ```
+
+Do **not** add `tests/` to the path. It contains test fakes with the same names as real functions and classes (e.g. `slap2.Slap2DataFile`, `Fast_BigTiff_Write`) that would replace them when running the pipeline. The unit tests add these folders themselves.
 
 Also add any external packages below to the path (e.g. `addpath(genpath(...))`).
 
@@ -76,6 +80,8 @@ MultiRoiRegistration;   % or BandRegistration
 SILo;                   % isSLAP2 = true
 ```
 
+**Extraction speed.** Source extraction solves its subproblems on a pool of worker processes (`params.nWorkers`, 12 by default; SILo's own pool is reused, and a thread pool is used if no process pool starts), and loads the next trial while the previous one is extracted. For SLAP2 data, the loader reads only the lines that sample the superpixels it needs. The activity fits use the Hessian in source space, are rescaled so the solver's first trust region spans the expected step, and precondition their conjugate-gradient steps with the Hessian's diagonal, so within the same iteration limits they come much closer to convergence. On a 16-core workstation (39 SLAP2 trials of about 5600 frames on each of two paths, 128–143 sources per path), extraction took 55–64 s per trial, against 462–550 s per trial before these changes, and the whole SILo run 1 h 51 min instead of 11 h 30 min.
+
 ## Epoch and analysis trial
 
 For each experiment we break the data into **epochs** and **analysis trials**.
@@ -114,8 +120,8 @@ Each experiment processed with GIAnT first gets a trial_table.h5 file that summa
  |  |     └ 📈 dmdPixel2SampleTransform
  |  ├ 🔢 first_line
  |  ├ 🔢 last_line
- |  ├ 🔢 trial_start_time_inferred
- |  └ 🔢 trial_end_time_from_pc
+ |  ├ 📈 trial_start_time_inferred
+ |  └ 📈 trial_end_time_from_pc
  ├ 📁 motion_correction
  |  ├ 🔤 fn_reg_ds
  |  ├ 🔤 fn_adata
@@ -304,8 +310,8 @@ A summary file of per-trial data is also saved as `per_trial_summary.h5` for any
 | `slap2_info/ref_stack/Path{1,2}/dmdPixel2SampleTransform` | 3 x 3 | numeric | Transformation matrix |
 | `slap2_info/first_line` | nPaths x total trials | integer | First line of each trial |
 | `slap2_info/last_line` | nPaths x total trials | integer | Last line of each trial |
-| `slap2_info/trial_start_time_inferred` | 1 x total trials | integer | Inferred trial start times |
-| `slap2_info/trial_end_time_from_pc` | 1 x total trials | integer | Trial end times from PC |
+| `slap2_info/trial_start_time_inferred` | 1 x total trials | numeric | Trial start times (MATLAB datenum), from the FPGA line timestamps when the data has them, otherwise inferred from file modification times |
+| `slap2_info/trial_end_time_from_pc` | 1 x total trials | numeric | Trial end times (MATLAB datenum), from the FPGA line timestamps when the data has them, otherwise from file modification times. Modification-time-based times are wrong for copied files (e.g. from S3); `buildTrialTableSLAP2` warns when they look like copy times |
 | `motion_correction` | — | group | Written by motion correction stage |
 | `motion_correction/fn_reg_ds` | nPaths x total trials | string | Registered + downsampled tif filename |
 | `motion_correction/fn_adata` | nPaths x total trials | string | Alignment metadata `_ALIGNMENTDATA.h5` filename |

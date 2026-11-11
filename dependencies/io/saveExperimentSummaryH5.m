@@ -158,24 +158,24 @@ for tIx = 1:nTrials
         if isfield(aData, 'DSframes') && ~isempty(aData.DSframes)
             DSf = double(aData.DSframes(:))';
             if isfield(aData, 'motionDSc')
-                offlineX(idxs) = interp1(DSf, double(aData.motionDSc(:))', frameLines, 'pchip', 'extrap') + dc;
+                offlineX(idxs) = upsampleMotion(DSf, double(aData.motionDSc(:))', frameLines, 'pchip') + dc;
             end
             if isfield(aData, 'motionDSr')
-                offlineY(idxs) = interp1(DSf, double(aData.motionDSr(:))', frameLines, 'pchip', 'extrap') + dr;
+                offlineY(idxs) = upsampleMotion(DSf, double(aData.motionDSr(:))', frameLines, 'pchip') + dr;
             end
             if isfield(aData, 'motionDSz')
-                offlineZ(idxs) = interp1(DSf, double(aData.motionDSz(:))', frameLines, 'pchip', 'extrap');
+                offlineZ(idxs) = upsampleMotion(DSf, double(aData.motionDSz(:))', frameLines, 'pchip');
             end
             slap2 = struct();
             if isfield(aData, 'slap2'), slap2 = aData.slap2; end
             if isfield(slap2, 'onlineMotionXshift')
-                onlineX(idxs) = interp1(DSf, double(slap2.onlineMotionXshift(:))', frameLines, 'nearest', 'extrap');
+                onlineX(idxs) = upsampleMotion(DSf, double(slap2.onlineMotionXshift(:))', frameLines, 'nearest');
             end
             if isfield(slap2, 'onlineMotionYshift')
-                onlineY(idxs) = interp1(DSf, double(slap2.onlineMotionYshift(:))', frameLines, 'nearest', 'extrap');
+                onlineY(idxs) = upsampleMotion(DSf, double(slap2.onlineMotionYshift(:))', frameLines, 'nearest');
             end
             if isfield(slap2, 'onlineMotionZshift')
-                onlineZ(idxs) = interp1(DSf, double(slap2.onlineMotionZshift(:))', frameLines, 'nearest', 'extrap');
+                onlineZ(idxs) = upsampleMotion(DSf, double(slap2.onlineMotionZshift(:))', frameLines, 'nearest');
             end
         end
     else
@@ -202,6 +202,17 @@ if isSlap2
     fi.onlineXshifts = onlineX;
     fi.onlineYshifts = onlineY;
     fi.onlineZshifts = onlineZ;
+end
+end
+
+
+function v = upsampleMotion(DSf, motionDS, frameLines, method)
+%motion at each frame line from the downsampled motion; constant when a
+%(short) trial has a single downsampled frame, which interp1 cannot use
+if numel(DSf) > 1
+    v = interp1(DSf, motionDS, frameLines, method, 'extrap');
+else
+    v = repmat(motionDS(1), size(frameLines));
 end
 end
 

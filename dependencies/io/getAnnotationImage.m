@@ -26,7 +26,7 @@ annTrial = validTrials(best);
 
 [~, fn, ext] = fileparts(trialTable.motion_correction.fn_reg_ds{DMDix,annTrial});
 adataFn = trialTable.motion_correction.fn_adata{DMDix, annTrial};
-aDataAnnot = loadStructFromH5(fullfile(mocodr, adataFn));
+aDataAnnot = loadStructFromH5(fullfile(mocodr, adataFn), '/slap2/varFacDS');
 if isfield(aDataAnnot, 'meanIM') && ~isempty(aDataAnnot.meanIM)
     IM = squeeze(mean(aDataAnnot.meanIM, 1, 'omitnan')); % numChannels x H x W -> H x W
 else
