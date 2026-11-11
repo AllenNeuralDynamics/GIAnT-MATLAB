@@ -1,18 +1,24 @@
 function E = processAllTrials_Async(dr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, motOutput, roiData, validTrials, params)
 %subproblems run on a pool of worker processes (see extractionPool)
+poolTimer = tic;
 extractionPool(params);
+fprintf('[SILo timing] extraction pool %.1f s\n', toc(poolTimer));
 numDatasets = numel(fls);
 E = cell(numDatasets,1);
 minFrames = 100; %extractTrial initializes from the first 100 samples; shorter trials cannot be source-extracted
 pending = []; %trial whose extraction is still running
 for i = 1:numel(validTrials)
     nLoad = validTrials(i);
+    loadTimer = tic;
     CD = loadTrial(dr, fns{nLoad},fls(nLoad),els(nLoad),selPix,discardFrames{nLoad}, alignData{nLoad}, meanAligned(:,:,:,nLoad), motOutput(:,nLoad), roiData, params);
     E{nLoad}.ROIs = CD.ROIs; E{nLoad}.global = CD.global;
     E{nLoad}.discardFrames = CD.discardFrames;
     E{nLoad}.frameLines = CD.frameLines;
+    fprintf('[SILo timing] trial %d: load %.1f s\n', nLoad, toc(loadTimer));
     if ~isempty(pending) %we process the previous trial after loading the next, to keep CPU usage up during loading
-        [E{pending}, B] = processResult(resultsFuture, E{pending},params);
+        waitTimer = tic;
+        E{pending} = processResult(resultsFuture, E{pending},params);
+        fprintf('[SILo timing] trial %d: waited %.1f s for extraction\n', pending, toc(waitTimer));
         if isempty(E{pending})
             disp(['Error processing trial: ' int2str(pending) '\n Continuing...'])
         end
@@ -34,7 +40,9 @@ for i = 1:numel(validTrials)
 end
 
 if ~isempty(pending)
-    [E{pending}, B] = processResult(resultsFuture,E{pending},params);
+    waitTimer = tic;
+    E{pending} = processResult(resultsFuture,E{pending},params);
+    fprintf('[SILo timing] trial %d: waited %.1f s for extraction\n', pending, toc(waitTimer));
     if isempty(E{pending})
         disp(['Error processing trial: ' int2str(pending) '\n Continuing...'])
     end
@@ -42,25 +50,11 @@ end
 
 end
 % ---------------- Helper Functions ----------------
-function plotE(E, Y,B,selPix) %debugging helper only
-    %generate activity movie, baseline movie, and residual
-    sel2D = any(selPix,3);
-    Ht = reshape(E.footprints,numel(sel2D),[]);
-    Ht = Ht(sel2D(:),:);
-
-    Amov = max(0,Ht,'omitmissing')*max(0,E.dF.denoised,'omitmissing');
-    Rmov = Y - Amov - B;
-
-    render = zeros([size(sel2D) 500]);
-    render(repmat(sel2D,1,1,500)) = B(:,501:1000);
-end
-
-function [E, B] = processResult(resultsFuture, E, params)
+function E = processResult(resultsFuture, E, params)
 try
-    [H,B,S,LS,F0,SNR] = fetchOutputs(resultsFuture);
+    [H,S,LS,F0,SNR] = fetchOutputs(resultsFuture);
     discard = E.discardFrames;
     E.footprints = H;
-    %E.baseline = single(B); %This is a huge variable and currently unused.
     E.dF.events = S;
     E.dF.events(:,discard) = nan;
 
@@ -78,8 +72,11 @@ try
 catch ME
     fprintf(2, 'processResult ERROR: %s\n', ME.message);
     fprintf(2, '%s\n', getReport(ME, 'extended', 'hyperlinks', 'off'));
-    B = [];
 end
+%free the trial's futures: kept, the client grew by ~3 GB per 780125 trial
+%until the pool was deleted
+delete(resultsFuture.Predecessors);
+delete(resultsFuture);
 end
 
 function CD = loadTrial(dr, fn, startLine, endLine, selPix, discardFrames, alignData, meanIM, motOutput, roiData, params)

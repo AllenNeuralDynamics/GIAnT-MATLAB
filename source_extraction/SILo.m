@@ -57,7 +57,9 @@ else
 end
 
 %PROCESS DATA
+siloTimer = tic;
 for DMDix = nDMDs:-1:1
+    pathTimer = tic;
     firstValidTrial = find(keepTrials(DMDix,:),1,"first");
     if isempty(firstValidTrial)
         warning('SILo:NoValidTrials', ...
@@ -78,8 +80,9 @@ for DMDix = nDMDs:-1:1
     end
 
     %load some metadata
+    stageTimer = tic;
     fn = trialTable.motion_correction.fn_adata{DMDix,firstValidTrial};
-    aData = loadStructFromH5(fullfile(mocodr, fn));
+    aData = loadStructFromH5(fullfile(mocodr, fn), '/slap2/varFacDS'); %metadata only
     numChannels = aData.numChannels;
     params.numChannels = numChannels;
     params.alignHz = aData.alignHz;
@@ -95,24 +98,32 @@ for DMDix = nDMDs:-1:1
         end
     end
     clear aData
+    fprintf('[SILo timing] Path %d: metadata %.1f s\n', DMDix, toc(stageTimer));
 
-    %set up parallelization
+    %set up parallelization. One pool of worker processes (extractionPool)
+    %serves localization and extraction. Localization runs at most as many
+    %trials at once as fit in memory (parfor's worker limit), so the pool is
+    %not restarted at another size for each stage and imaging path
+    stageTimer = tic;
+    nLocWorkers = 0; %0: localize on the client
     if params.nWorkers>1
-        p = gcp('nocreate');
-        if isempty(p)
-            poolsize = 0;
-        else
-            poolsize = p.NumWorkers;
-        end
-        dd = dir(fullfile(mocodr, trialTable.motion_correction.fn_reg_ds{DMDix, firstValidTrial}));
+        pool = extractionPool(params);
+        %bytes of one channel of the registered movie, as single (h5 files may be compressed)
+        regFn = fullfile(mocodr, trialTable.motion_correction.fn_reg_ds{DMDix, firstValidTrial});
         try
-            fileSize = dd.bytes;
+            if endsWith(regFn, '.h5')
+                desc = h5info(regFn);
+                channelBytes = 4*prod(desc.Datasets(1).Dataspace.Size)/numChannels;
+            else
+                dd = dir(regFn);
+                channelBytes = dd.bytes/numChannels;
+            end
         catch
-            error(['Error loading registered tiff:' trialTable.motion_correction.fn_reg_ds{DMDix, firstValidTrial} '\n' 'Are paths in your trial table valid?']);
+            error(['Error loading registered movie:' trialTable.motion_correction.fn_reg_ds{DMDix, firstValidTrial} '\n' 'Are paths in your trial table valid?']);
         end
         if ispc
-            userMemInfo = memory;
-            memAvailable = userMemInfo.MemAvailableAllArrays;
+            [~, systemMemInfo] = memory;
+            memAvailable = systemMemInfo.PhysicalMemory.Available; %MemAvailableAllArrays counts the page file
         elseif ismac
             memAvailable = localMacMemAvailable();
         elseif exist('/proc/meminfo', 'file')
@@ -130,26 +141,35 @@ for DMDix = nDMDs:-1:1
                 'Could not determine available memory; assuming 8 GB.');
             memAvailable = 8 * 1024^3;
         end
-        maxWorkers = max(1,min(size(trialTable.filename,2), floor(0.13*memAvailable/fileSize)));
-        nWorkers = min(params.nWorkers, maxWorkers);
-        
-        if poolsize~=nWorkers ||  ~strcmpi(class(p), 'parallel.ProcessPool')
-            delete(gcp('nocreate'));
-            parpool('processes',nWorkers); %limit the number of workers to avoid running out of RAM
+        %a worker localizing a trial peaks at ~8x one channel's movie plus ~1 GB
+        %(measured: 780125 SLAP2 trials of 2.4 and 3.3 GB per channel, and a
+        %one-channel 2.1 GB simulation); allow 9x
+        bytesPerWorker = 9*channelBytes + 2^30;
+        maxWorkers = max(1,min(size(trialTable.filename,2), floor(memAvailable/bytesPerWorker)));
+        if isa(pool, 'parallel.ProcessPool')
+            nLocWorkers = min([params.nWorkers, maxWorkers, pool.NumWorkers]);
+        else
+            warning('SILo:noProcessPool', 'No pool of worker processes; localizing trials one at a time on the client');
         end
+        fprintf('Localizing up to %d trials at once (%.0f GB available, %.1f GB per trial)\n', nLocWorkers, memAvailable/2^30, bytesPerWorker/2^30);
     else
         delete(gcp('nocreate'));
     end
 
+    fprintf('[SILo timing] Path %d: localization pool %.1f s\n', DMDix, toc(stageTimer));
+
     %Perform Localizations
     disp('Loading data and performing localizations...')
+    stageTimer = tic;
     mIM = cell(1, nTrials); aIM = cell(1,nTrials); alignData = cell(1, nTrials); peaks = cell(1, nTrials); discardFrames = cell(1,nTrials);
     fns = trialTable.motion_correction.fn_reg_ds(DMDix, :);
-    parfor trialIx = 1:nTrials
+    parfor (trialIx = 1:nTrials, nLocWorkers)
         if keepTrials(DMDix,trialIx)
             [~, mIM{trialIx}, aIM{trialIx}, alignData{trialIx}, peaks{trialIx}, discardFrames{trialIx}]= loadAndProcessTrialAsync(mocodr, fns{trialIx}, numChannels, params);
         end
     end
+    fprintf('[SILo timing] Path %d: localization %.1f s\n', DMDix, toc(stageTimer));
+    stageTimer = tic;
     %Assemble same-sized mean images from different-sized trial means
     szm1 = max(cellfun(@(x)size(x,1),mIM)); szm2 = max(cellfun(@(x)size(x,2), aIM));
     meanIM = nan(szm1,szm2,numChannels, nTrials); activIM = nan(szm1,szm2,1, nTrials);
@@ -270,6 +290,7 @@ for DMDix = nDMDs:-1:1
     end
     selPix = selPix(:,:,keepSources);
     disp(['Number of sources: ' int2str(sum(keepSources))]);
+    fprintf('[SILo timing] Path %d: alignment and source selection %.1f s\n', DMDix, toc(stageTimer));
         
     %for each file, load high res data and refine
     params.tau_full=params.tau_s*params.analyzeHz;
@@ -282,6 +303,7 @@ for DMDix = nDMDs:-1:1
     end
 
     if any(keepSources)
+        stageTimer = tic;
         fns = trialTable.source_extraction.fn_raw(DMDix,:);
         if params.isSLAP2
             if isfield(trialTable, 'datadr') && ~isempty(trialTable.datadr)
@@ -298,6 +320,7 @@ for DMDix = nDMDs:-1:1
             E = processAllTrials_Async(mocodr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, motOutput, roiData, validTrials, params);
         end
         exptSummary.E(:,DMDix) = E;
+        fprintf('[SILo timing] Path %d: extraction %.1f s\n', DMDix, toc(stageTimer));
     end
     exptSummary.selPix{DMDix} = any(selPix,3);
     exptSummary.sources{DMDix} = sources;
@@ -311,7 +334,9 @@ for DMDix = nDMDs:-1:1
     exptSummary.perTrialAlignmentOffsets{DMDix} = motOutput;
 
     clear meanAligned meanIM actAligned E
+    fprintf('[SILo timing] Path %d: total %.1f s\n', DMDix, toc(pathTimer));
 end
+stageTimer = tic;
 
 % Shut down the parallel pool explicitly so thread-pool arrays are
 % fully materialised into regular MATLAB memory before the HDF5 saves.
@@ -326,10 +351,15 @@ exptSummary.params = params;
 exptSummary.trialTable = trialTable;
 exptSummary.dr = dr;
 
+fprintf('[SILo timing] pool shutdown %.1f s\n', toc(stageTimer));
 %save (with retry so a transient HDF5 error does not discard all results)
+stageTimer = tic;
 trySave(@() saveStructToH5(trialTable, [dr filesep trialTablefn]),          'trial_table');
+fprintf('[SILo timing] save trial_table %.1f s\n', toc(stageTimer)); stageTimer = tic;
 trySave(@() saveExperimentSummaryH5(fullfile(savedr, 'experiment_summary.h5'), exptSummary, trialTable), 'experiment_summary');
+fprintf('[SILo timing] save experiment_summary %.1f s\n', toc(stageTimer)); stageTimer = tic;
 trySave(@() savePerTrialSummaryH5(  fullfile(savedr, 'per_trial_summary.h5'),  exptSummary, trialTable), 'per_trial_summary');
+fprintf('[SILo timing] save per_trial_summary %.1f s\n[SILo timing] all %.1f s\n', toc(stageTimer), toc(siloTimer));
 
 %verify the saved file is readable and non-empty
 expSumFn = fullfile(savedr, 'experiment_summary.h5');

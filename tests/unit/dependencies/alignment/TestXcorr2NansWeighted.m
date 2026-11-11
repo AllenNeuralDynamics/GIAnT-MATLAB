@@ -138,6 +138,30 @@ classdef TestXcorr2NansWeighted < matlab.unittest.TestCase
             testCase.verifyEqual(motion2, motion1);
             testCase.verifyEqual(R2, R1);
         end
+
+        function testMatchesPerPixelReference(testCase)
+            % Identical results to the per-pixel (find/sub2ind) implementation
+            % it replaced, on frames with NaN borders and holes, nonuniform
+            % freshness, offset search centers and shifts past the edge.
+            stream = RandStream('mt19937ar', 'Seed', 3);
+            for rep = 1:12
+                sz = [40 60] + randi(stream, 20, 1, 2);
+                T = conv2(rand(stream, sz + 4), ones(5)/25, 'valid');
+                T(rand(stream, sz) < 0.05) = nan;
+                F = circshift(T, randi(stream, [-4 4], 1, 2)) + 0.05*randn(stream, sz);
+                F(:, 1:randi(stream, 10)) = nan;
+                F(rand(stream, sz) < 0.1) = nan;
+                fresh = 1 + 3*rand(stream, sz);
+                center = randi(stream, [-3 3], 2, 1);
+                dShift = randi(stream, [2 6]);
+
+                [motion, R] = xcorr2_nans_weighted(F, fresh, T, center, dShift);
+                [motionRef, Rref] = perPixelReference(F, fresh, T, center, dShift);
+
+                testCase.verifyEqual(motion, motionRef);
+                testCase.verifyEqual(R, Rref);
+            end
+        end
     end
 
     methods (Access = private)
@@ -160,4 +184,44 @@ classdef TestXcorr2NansWeighted < matlab.unittest.TestCase
             tex = 10 + 90*(tex - min(tex(:)))/(max(tex(:)) - min(tex(:)));
         end
     end
+end
+
+function [motion, R] = perPixelReference(frame, freshness, template, shiftsCenter, dShift)
+% xcorr2_nans_weighted before it took overlapping blocks per shift
+sz = size(template);
+dShift = round(dShift(1));
+template = circshift(template, shiftsCenter);
+[Fr0, Fc0] = find(~isnan(frame));
+shifts = -dShift:dShift;
+C = nan(length(shifts), length(shifts));
+for drix = 1:length(shifts)
+    for dcix = 1:length(shifts)
+        Tr = Fr0 + shifts(drix);
+        Tc = Fc0 + shifts(dcix);
+        valid = Tr>=1 & Tr<=sz(1) & Tc>=1 & Tc<=sz(2);
+        Fr = Fr0(valid); Fc = Fc0(valid); Tr = Tr(valid); Tc = Tc(valid);
+        T = template(sub2ind(sz, Tr, Tc));
+        sel = ~isnan(T); T = T(sel);
+        indsF = sub2ind(sz, Fr(sel), Fc(sel));
+        F = frame(indsF);
+        Ff = freshness(indsF);
+        sFT = sum(Ff.*(F-mean(F)).*(T-mean(T)));
+        sT = mean((T-mean(T)).^2);
+        sF = sum(Ff.*(F-mean(F)).^2);
+        C(drix,dcix) = sFT./sqrt(sT.*sF.*sum(Ff));
+    end
+end
+[maxval, I] = max(C(:));
+[rr, cc] = ind2sub(size(C), I);
+R = maxval;
+if rr>1 && rr<length(shifts) && cc>1 && cc<length(shifts)
+    ratioR = min(1e6,(C(rr,cc) - C(rr-1,cc))/(C(rr,cc) - C(rr+1,cc)));
+    dR = (1-ratioR)/(1+ratioR)/2;
+    ratioC = min(1e6,(C(rr,cc) - C(rr,cc-1))/(C(rr,cc) - C(rr,cc+1)));
+    dC = (1-ratioC)/(1+ratioC)/2;
+    motion = -shiftsCenter' + [shifts(rr)-dR shifts(cc)-dC];
+else
+    motion = -shiftsCenter' + [shifts(rr) shifts(cc)];
+end
+motion = -motion;
 end
