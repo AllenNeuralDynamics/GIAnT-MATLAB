@@ -3,7 +3,8 @@ function saveStructToH5(s, filename)
 %   SAVESTRUCTTOH5(s, filename) recursively maps MATLAB struct fields onto
 %   the HDF5 hierarchy:
 %     - Scalar struct fields become HDF5 groups.
-%     - Cell arrays of char/string become variable-length string datasets.
+%     - Cell arrays of char rows/string scalars become variable-length
+%       string datasets (empty elements as "").
 %     - char rows and string scalars/arrays become string datasets.
 %     - Numeric and logical arrays become numeric datasets (logicals as int8).
 %     - Empty fields are skipped; a group exists only above a dataset.
@@ -72,9 +73,10 @@ if isstruct(val)
     end
     validateGroup(path, val);
 elseif iscell(val)
-    if ~all(cellfun(@(x) ischar(x) || isstring(x) || isempty(x), val(:)))
+    % each element becomes one string of the dataset
+    if ~all(cellfun(@isTextScalar, val(:)))
         error('saveStructToH5:UnsupportedCell', ...
-            'Only cell arrays of char/string are supported (at %s).', path);
+            'Only cell arrays of char rows or string scalars are supported (at %s).', path);
     end
 elseif ischar(val)
     if ~isempty(val) && ~isrow(val)
@@ -90,10 +92,21 @@ elseif isnumeric(val)
         error('saveStructToH5:UnsupportedNumeric', ...
             'Sparse and complex arrays are not supported (at %s).', path);
     end
-elseif ~isstring(val) && ~islogical(val)
+elseif islogical(val)
+    if issparse(val) %written as int8, which cannot be sparse
+        error('saveStructToH5:UnsupportedLogical', ...
+            'Sparse logical arrays are not supported (at %s).', path);
+    end
+elseif ~isstring(val)
     error('saveStructToH5:UnsupportedType', ...
         'Unsupported value type ''%s'' at %s.', class(val), path);
 end
+end
+
+
+function tf = isTextScalar(x)
+%ISTEXTSCALAR A cell element that writes as one string ("" if empty)
+tf = isempty(x) || (ischar(x) && isrow(x)) || (isstring(x) && isscalar(x));
 end
 
 

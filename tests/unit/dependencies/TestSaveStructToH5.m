@@ -111,6 +111,10 @@ classdef TestSaveStructToH5 < matlab.unittest.TestCase
                 [1+2i 3],              'saveStructToH5:UnsupportedNumeric'
                 ['ab'; 'cd'],          'saveStructToH5:UnsupportedChar'
                 {{1, 2}},              'saveStructToH5:UnsupportedCell'
+                {{["a", "b"]}},        'saveStructToH5:UnsupportedCell'
+                {{['ab'; 'cd']}},      'saveStructToH5:UnsupportedCell'
+                {{('ab')'}},           'saveStructToH5:UnsupportedCell'
+                sparse(true(2)),       'saveStructToH5:UnsupportedLogical'
                 @sin,                  'saveStructToH5:UnsupportedType'
                 struct('a', {1, 2}),   'saveStructToH5:NonScalarStruct'
                 };
