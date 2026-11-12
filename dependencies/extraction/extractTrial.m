@@ -481,7 +481,7 @@ function HPsurround = getSurround(HP, selPix, params)
 %outside selPix are zero, so each filter is a sparse #pixels x #pixels
 %operator. Applying it costs O(#pixels * nnz(filter) * T), where convolving
 %the whole map at every frame costs O(map area * filter area * T).
-pixIx = find(selPix);
+pixIx = find(selPix(:));
 nPix = numel(pixIx);
 [r, c] = ind2sub(size(selPix), pixIx);
 pixOrder = zeros(size(selPix));
