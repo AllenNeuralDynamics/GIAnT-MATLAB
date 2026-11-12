@@ -476,13 +476,34 @@ HP = A-LP;
 end
 
 function HPsurround = getSurround(HP, selPix, params)
-%convert to pixel space
-HPfull = zeros(size(selPix,1), size(selPix,2), size(HP,2));
-HPfull(repmat(selPix, 1, 1, size(HP,2))) = HP;
-for filtIx = size(params.Bfilter,3):-1:1
-    tmp = convn(HPfull, params.Bfilter(:,:,filtIx), 'same');
-    tmp = reshape(tmp, [], size(tmp,3));
-    HPsurround(:,:,filtIx) = tmp(selPix(:),:);
+%Each surround filter in params.Bfilter applied to HP as a 2-D 'same'
+%convolution over the selPix map, read out at the selected pixels. Pixels
+%outside selPix are zero, so each filter is a sparse #pixels x #pixels
+%operator. Applying it costs O(#pixels * nnz(filter) * T), where convolving
+%the whole map at every frame costs O(map area * filter area * T).
+pixIx = find(selPix(:));
+nPix = numel(pixIx);
+[r, c] = ind2sub(size(selPix), pixIx);
+pixOrder = zeros(size(selPix));
+pixOrder(pixIx) = 1:nPix; % row of HP that holds each map pixel
+HP = double(HP);
+nFilt = size(params.Bfilter, 3);
+HPsurround = zeros(nPix, size(HP,2), nFilt);
+for filtIx = 1:nFilt
+    filt = params.Bfilter(:,:,filtIx);
+    [fr, fc, fv] = find(filt);
+    % convn 'same', filter centre (cr,cc) = floor(size(filt)/2)+1:
+    % out(r,c) = sum over taps of filt(fr,fc) * in(r+cr-fr, c+cc-fc)
+    srcR = r + (floor(size(filt,1)/2) + 1 - fr');
+    srcC = c + (floor(size(filt,2)/2) + 1 - fc');
+    inMap = srcR >= 1 & srcR <= size(selPix,1) & srcC >= 1 & srcC <= size(selPix,2);
+    src = zeros(size(srcR));
+    src(inMap) = pixOrder(sub2ind(size(selPix), srcR(inMap), srcC(inMap)));
+    use = src > 0;
+    dst = repmat((1:nPix)', 1, numel(fv));
+    wts = repmat(fv', nPix, 1);
+    S = sparse(dst(use), src(use), wts(use), nPix, nPix);
+    HPsurround(:,:,filtIx) = S * HP;
 end
 end
 
