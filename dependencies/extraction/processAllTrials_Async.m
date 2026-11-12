@@ -128,6 +128,7 @@ if params.isSLAP2
         labeled = ~isnan(meanIM(:,:,params.activityChannel)) & labeled>3*prctile(labeled(~isnan(labeled)), 25); %labeled pixels
         
         meanPx = reshape(meanIM, numel(labeled), numChannels);
+        meanPx = meanPx(:, orderedChannels); %meanIM is in raw channel order; match the reordered frames below
         mLabeled = meanPx(labeled,:);
 
         %pixels to sample: sources, labeled pixels (global activity) and user
@@ -153,7 +154,8 @@ if params.isSLAP2
             fIxs  = blockEdges(bix):(blockEdges(bix+1)-1);
             nFramesInBlock = length(fIxs);
             %as getImages(orderedChannels, frameLines(fIxs), ceil(dt), 1, 1), trimmed
-            %and interpolated with interpFrames, at the sampled pixels only
+            %and interpolated with interpFrames, at the sampled pixels only, but with
+            %the channels in analysis order (getImages returns them in file order)
             [Yq, Fq] = slap2FramesAt(S2data, orderedChannels, frameLines(fIxs), ceil(dt), ...
                 alignDataSlap2.trimRows, alignDataSlap2.trimCols, rD, cD, motionR(fIxs), motionC(fIxs));
 
@@ -223,6 +225,7 @@ if params.isSLAP2
         scored = (scored-prctile(scored(:),25,'all'))./(prctile(scored(:),99,'all')-prctile(scored(:),25,'all'));
         labeled = scored>0.1;
         meanPx = reshape(meanIM, numel(labeled), numChannels);
+        meanPx = meanPx(:, orderedChannels); %meanIM is in raw channel order; match the reordered frames below
         mLabeled = meanPx(labeled,:);
 
         blocksize = 600; %number of frames to load at a time;
@@ -238,7 +241,7 @@ if params.isSLAP2
             nFramesInBlock = length(fIxs);
             
             Y = IM(:,:,:,fIxs); %reduce communication overhead to parallel workers
-            nanMask = isnan(Y);
+            nanMask = isnan(Y(:,:,orderedChannels,:)); %Y2 below is in analysis channel order
             Y2 = nan(length(viewR),length(viewC),numChannels, nFramesInBlock);
             Finv = nan(length(viewR),length(viewC),nFramesInBlock);
             parfor frIx = 1:nFramesInBlock
@@ -314,7 +317,7 @@ end
 function [Yq, Fq] = slap2FramesAt(S2, ch, times, dt, trimRows, trimCols, rD, cD, mR, mC)
 %the frames getImages(ch, times, dt, 1, 1) returns, trimmed to trimRows x
 %trimCols and interpolated as interpFrames does, at rows rD + mR(f) and columns
-%cD + mC(f) of frame f: Yq is numel(rD) x channels x frames, Fq (the variance
+%cD + mC(f) of frame f: Yq is numel(rD) x channels (in the order of ch) x frames, Fq (the variance
 %multiplier) numel(rD) x frames. Frames are formed only at the raster
 %superpixels that these points' neighbours can fall on in this block, and only
 %the lines that sample those are read, which is several times faster than
@@ -368,7 +371,7 @@ end
 
 function [V, W] = rawFramesAt(S2, ch, times, dt, id, nRaster)
 %getImages' frames at raster superpixels id only: V is numel(id) x frames x
-%channels, W (getImages' dataCount) numel(id) x frames
+%channels (in the order of ch), W (getImages' dataCount) numel(id) x frames
 hdr = S2.hMultiDataFiles.header; P = double(hdr.linesPerCycle);
 dtRead = max(3 * dt, P); total = S2.hMultiDataFiles.totalNumLines;
 inWin = false(1, max(times) + dtRead);
@@ -387,11 +390,14 @@ for j = 1:numel(Ls)
 end
 keep = ismember(li, Ls(use));   % only lines that sample a needed superpixel are read
 lineTimes = lineTimes(keep); li = li(keep); ci = ci(keep);
-ld = S2.hMultiDataFiles.getLineData(li, ci, ch);
+%the reader reads channels min(ch):max(ch) as one block and returns them in file
+%order, whatever order they are requested in: read that span, then pick ch
+chRead = min(ch):max(ch);
+ld = S2.hMultiDataFiles.getLineData(li, ci, chRead);
 Lu = Ls(use); parts = cell(numel(Lu), nCh); wparts = cell(numel(Lu), 1); cols = cell(numel(Lu), 1);
 for j = 1:numel(Lu)
     L = Lu(j); k = find(li == L);
-    D = cat(3, ld{k}); D = double(D(sel{L}, :, :));   % pixels x channels x cycles
+    D = cat(3, ld{k}); D = double(D(sel{L}, ch - chRead(1) + 1, :));   % pixels x channels (order of ch) x cycles
     d = times(:) - lineTimes(k);
     [fi, ki] = find(abs(d) < dtRead);
     Wk = sparse(fi, ki, exp(-abs(d(abs(d) < dtRead)) / dt), nF, numel(k));   % frames x cycles
