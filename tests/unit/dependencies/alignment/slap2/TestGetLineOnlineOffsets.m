@@ -42,6 +42,30 @@ classdef TestGetLineOnlineOffsets < matlab.unittest.TestCase
             testCase.verifyEqual(off.xySwitchLines, [4; 8; 11]);
         end
 
+        function testDmdYTiming(testCase)
+            % a new y reaches the DMD 2 lines before the header records it, or
+            % 6 lines when x changes too, but not before the previous switch
+            P = 10; n = 70;
+            x = zeros(n, 1, 'int16'); y = zeros(n, 1, 'int16');
+            y(20:end) = 1;                 % y only at line 20
+            x(40:end) = 1; y(40:end) = 2;  % x and y at line 40
+            x(50:end) = 2;                 % x only at line 50
+            y(51:end) = 3;                 % y only at 51, one line after the previous switch
+            f = false(n, 1);
+            D = TestGetLineOnlineOffsets.makeFile(P, x, y, zeros(n, 1, 'single'), f, f, 40);
+            off = getLineOnlineOffsets(D);
+            expected = y;
+            expected(18:19) = 1;
+            expected(34:39) = 2;
+            expected(50) = 3;
+            testCase.verifyEqual(off.y, y);        % the header values are unchanged
+            testCase.verifyEqual(off.yEff, expected);
+            testCase.verifyEqual(off.yLead, [2 6]);
+            off3 = getLineOnlineOffsets(D, YLead = [3 0]);
+            expected = y; expected(17:19) = 1; expected(50) = 3;
+            testCase.verifyEqual(off3.yEff, expected);
+        end
+
         function testHeadersWithoutZ(testCase)
             P = 2; n = 4;
             D = TestGetLineOnlineOffsets.makeFile(P, int16((1:n)'), int16((1:n)'), single(ones(n, 1)), false(n, 1), false(n, 1), 32);

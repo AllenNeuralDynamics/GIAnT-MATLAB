@@ -28,6 +28,10 @@ function [Num, Den, pix] = slap2FrameSums(S2, channels, times, dt, opts)
 %                       frame. Only x/y are undone: z steps are small and the z
 %                       actuator is slow.
 %     Offsets           output of getLineOnlineOffsets(S2), read when empty.
+%     SwitchTiming      'dmd' (default) places each line by the offset that was
+%                       on the DMD while it was acquired: a new y arrives 2-6
+%                       lines before the header records it (Offsets.yEff, see
+%                       getLineOnlineOffsets). 'header' uses the header offsets.
 %     RefOffset         header offset [x y] placed without a shift. Default:
 %                       the median offset over the recording, rounded.
 %     Mapping           2x2 matrix taking a header offset difference [dx; dy] to
@@ -57,6 +61,7 @@ arguments
     opts.MaskInvalid (1,1) logical = true
     opts.CompensateOnline (1,1) logical = false
     opts.Offsets = []
+    opts.SwitchTiming (1,:) char {mustBeMember(opts.SwitchTiming, {'dmd', 'header'})} = 'dmd'
     opts.RefOffset double = []
     opts.Mapping double = []
     opts.Pixels double = []
@@ -123,7 +128,9 @@ if opts.CompensateOnline
     if isempty(ref), ref = round([median(double(off.x)) median(double(off.y))]); end
     map = opts.Mapping;
     if isempty(map), map = [0 1; 1 0]; end
-    d = (map * [double(off.x(uLines))' - ref(1); double(off.y(uLines))' - ref(2)])';
+    yOff = off.y;
+    if strcmp(opts.SwitchTiming, 'dmd') && isfield(off, 'yEff'), yOff = off.yEff; end
+    d = (map * [double(off.x(uLines))' - ref(1); double(yOff(uLines))' - ref(2)])';
     assert(all(d(:) == round(d(:))), 'slap2Frames:nonIntegerShift', 'Mapping must give integer shifts.');
     [shifts, ~, shiftIdx] = unique(d, 'rows');
 end

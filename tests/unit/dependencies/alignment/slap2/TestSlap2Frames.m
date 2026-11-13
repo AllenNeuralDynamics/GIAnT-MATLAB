@@ -72,6 +72,26 @@ classdef TestSlap2Frames < matlab.unittest.TestCase
             testCase.verifyEqual(double(F), Fref, 'RelTol', 1e-6);
         end
 
+        function testSwitchTimingUsesDmdY(testCase)
+            % with Offsets.yEff (the y on the DMD), lines are placed by it by
+            % default, and by the header y with SwitchTiming 'header'
+            S2 = testCase.makeData();
+            n = testCase.totalLines;
+            x = zeros(n, 1); y = zeros(n, 1); y(57:end) = -2;
+            yEff = y; yEff(55:56) = -2;
+            off = testCase.offsets(x, y); off.yEff = int16(yEff);
+            args = {'CompensateOnline', true, 'Offsets', off, 'RefOffset', [0 0]};
+            [IM, F] = slap2Frames(S2, [1 2], [50 55 60], 3, args{:});
+            [IMref, Fref] = testCase.reference(S2, [1 2], [50 55 60], 3, 'exp', [x yEff], [0 1; 1 0]);
+            testCase.verifyEqual(isnan(IM), isnan(IMref));
+            testCase.verifyEqual(double(IM(~isnan(IM))), IMref(~isnan(IMref)), 'RelTol', 1e-6);
+            testCase.verifyEqual(double(F), Fref, 'RelTol', 1e-6);
+            IMh = slap2Frames(S2, [1 2], [50 55 60], 3, args{:}, 'SwitchTiming', 'header');
+            IMhref = testCase.reference(S2, [1 2], [50 55 60], 3, 'exp', [x y], [0 1; 1 0]);
+            testCase.verifyEqual(isnan(IMh), isnan(IMhref));
+            testCase.verifyEqual(double(IMh(~isnan(IMh))), IMhref(~isnan(IMhref)), 'RelTol', 1e-6);
+        end
+
         function testCycleKernel(testCase)
             S2 = testCase.makeData();
             [IM, F] = slap2Frames(S2, 1, [1 4 20], 1, Kernel = 'cycle');

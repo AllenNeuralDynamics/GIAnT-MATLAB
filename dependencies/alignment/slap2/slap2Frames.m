@@ -19,6 +19,10 @@ function [IM, freshness] = slap2Frames(S2, channels, times, dt, opts)
 %                       are small and the z actuator is slow.
 %     Offsets           output of getLineOnlineOffsets(S2), read when empty.
 %                       Pass it in when calling repeatedly on one recording.
+%     SwitchTiming      'dmd' (default): each line is placed by the offset on
+%                       the DMD while it was acquired, with y switching 2-6
+%                       lines before the header records it. 'header': the
+%                       header offsets as recorded. See slap2FrameSums.
 %     RefOffset         header offset [x y] that is placed without a shift.
 %                       Default: the median offset over the recording.
 %     Mapping           2x2 matrix taking a header offset difference [dx; dy]
@@ -40,6 +44,7 @@ arguments
     opts.Kernel (1,:) char {mustBeMember(opts.Kernel, {'exp', 'cycle'})} = 'exp'
     opts.CompensateOnline (1,1) logical = false
     opts.Offsets = []
+    opts.SwitchTiming (1,:) char = 'dmd'
     opts.RefOffset double = []
     opts.Mapping double = []
     opts.Rows (1,:) double = []
@@ -65,7 +70,8 @@ end
 map = opts.Mapping;
 if isempty(map), map = defaultMapping(); end
 [Num, Den, pix] = slap2FrameSums(S2, channels, times, dt, Kernel = opts.Kernel, ...
-    CompensateOnline = opts.CompensateOnline, Offsets = opts.Offsets, RefOffset = opts.RefOffset, ...
+    CompensateOnline = opts.CompensateOnline, Offsets = opts.Offsets, SwitchTiming = opts.SwitchTiming, ...
+    RefOffset = opts.RefOffset, ...
     Mapping = map, Pixels = window, ZIdx = opts.ZIdx, Reader = opts.Reader);
 
 %place them in the window
