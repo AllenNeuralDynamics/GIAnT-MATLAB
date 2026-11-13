@@ -414,7 +414,75 @@ end
 
 function B = fitB(B0,Y,X, H, Finv, selPix, params)
 %fits a baseline (i.e. F0) to the measurements in Y, given the current
-%estimate of the activity, HX
+%estimate of the activity, HX. For each pixel, a bounded weighted
+%least-squares fit of Y to the sources' contributions (>= 0), fast baseline
+%predictors from the surrounding pixels (getSurround) and a slow baseline.
+%The slow baseline is a cubic B-spline with knots every
+%params.baselineKnotFactor (default 0.5) baseline windows, tiling the trial.
+%A curvature penalty keeps it flat: the squared second differences of the
+%spline coefficients cost params.baselinePenalty (default 30) knot
+%intervals' worth of data weight, so level and linear drift are free. On
+%simulated short trials this beats the sine/cosine basis, most of all near
+%trial ends, and the result barely changes between penalties of 30 and 100.
+if isfield(params, 'baselineBasis') && strcmp(params.baselineBasis, 'sines') %developer-only, for comparisons
+    B = fitB_sines(B0,Y,X, H, Finv, selPix, params);
+    return
+end
+knotFactor = 0.5;
+if isfield(params, 'baselineKnotFactor') && ~isempty(params.baselineKnotFactor), knotFactor = params.baselineKnotFactor; end
+kappa = 30;
+if isfield(params, 'baselinePenalty') && ~isempty(params.baselinePenalty), kappa = params.baselinePenalty; end
+T = size(Y,2);
+[~, HP] = splitFreq(Y-H*X, 2*params.denoiseWindow_samps, ceil(params.baselineWindow_samps/params.denoiseWindow_samps));
+HP(isnan(HP)) = 0;
+HPsurround = getSurround(HP,selPix,params);
+Bs = bsplineBasis(T, knotFactor*params.baselineWindow_samps); %T x K, sparse
+K = size(Bs,2);
+nInt = K - 3; %knot intervals
+e = ones(K,1);
+Dc = spdiags([e -2*e e], 0:2, K-2, K);
+Pc = full(Dc'*Dc)/nInt; %curvature penalty per knot interval
+nSrc = size(H,2);
+HX = H*X;
+opts = optimoptions('quadprog','Display','none');
+for pxIx = size(Y,1):-1:1
+    scale = max(1e-3, mean(Y(pxIx,:)));
+    D = [H(pxIx,:)'.*X; squeeze(HPsurround(pxIx,:,:))']; %sources, then surround
+    d = size(D,1);
+    w = (1./Finv(pxIx,:)) .* (B0(pxIx,:)./(B0(pxIx,:) + HX(pxIx,:))).^2;
+    Dw = D.*w;
+    %normal equations of [D; spline] with the penalty on the spline block
+    Gbd = Bs'*Dw';
+    Gbb = full(Bs'*spdiags(w(:),0,T,T)*Bs) + kappa*sum(w)*Pc;
+    G = [Dw*D' Gbd'; Gbd Gbb]; G = (G+G')/2;
+    c = [Dw*Y(pxIx,:)'; Bs'*(w.*Y(pxIx,:))'];
+    lb = [zeros(nSrc,1); -10*scale*ones(d-nSrc+K,1)];
+    ub = 10*scale*ones(d+K,1);
+    b = quadprog(G, -c, [],[],[],[], lb, ub, [], opts);
+    B(pxIx,:) = max(params.minBaseline, b(nSrc+1:d)'*D(nSrc+1:end,:) + (Bs*b(d+1:end))');
+end
+end
+
+function Bs = bsplineBasis(T, delta)
+%uniform cubic B-splines on t = 0..T-1 (sparse T x K), with the knot
+%spacing adjusted from delta so that whole knot intervals tile the trial
+t = (0:T-1)';
+n = max(1, round((T-1)/delta));
+delta = max(T-1, 1)/n;
+u = t/delta;
+i = min(floor(u), n-1);
+f = u - i;
+vals = [(1-f).^3, 3*f.^3-6*f.^2+4, -3*f.^3+3*f.^2+3*f+1, f.^3]/6;
+cols = i + (1:4);
+rows = repmat((1:T)', 1, 4);
+Bs = sparse(rows(:), cols(:), vals(:), T, n+3);
+end
+
+function B = fitB_sines(B0,Y,X, H, Finv, selPix, params)
+%the previous baseline model: sine/cosine predictors at multiples of the
+%baseline window, a linear trend and a constant, with the sources and
+%surround as in fitB. Not a user option: kept so the two models can be
+%compared, and reached only through the undocumented params.baselineBasis.
 num_time_points = size(Y,2);
 [~, HP] = splitFreq(Y-H*X, 2*params.denoiseWindow_samps, ceil(params.baselineWindow_samps/params.denoiseWindow_samps));
 HP(isnan(HP)) = 0;
