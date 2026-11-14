@@ -124,6 +124,9 @@ dt = linerateHz/aData.alignHz;
 numChannels = S2data.numChannels;
 minSamps = 15; %minimimum number of samples to include in template
 
+%undo the online motion correction line by line (raster SLAP2 frames only)
+comp = setupCompensation(S2data, params, spTypeFlag, fnW);
+
 if params.isReVolt
     numChannels = 1;
     redChannel =2;
@@ -185,9 +188,10 @@ if nInitFrames==0
     registrationFailed = true;
     return
 end
+initRef = frameRefOffsets(comp, initFrames, ceil(dt));
 for fix = nInitFrames:-1:1
     for cix = numChannels:-1:1
-        [Y(:,:,cix,fix), freshness(:,:,fix)] = getImageWrapper(S2data, cix, initFrames(fix), ceil(dt), 1, spTypeFlag);
+        [Y(:,:,cix,fix), freshness(:,:,fix)] = getImageWrapper(S2data, cix, initFrames(fix), ceil(dt), 1, spTypeFlag, comp, initRef(fix,:));
     end
 end
 
@@ -198,8 +202,15 @@ else
 end
 
 %make data smaller for alignment
-trimRows = find(~all(isnan(Y(:,:,1)),2), 1, 'first'):find(~all(isnan(Y(:,:,1)),2), 1, 'last');
-trimCols = find(~all(isnan(Y(:,:,1)),1), 1, 'first'):find(~all(isnan(Y(:,:,1)),1), 1, 'last');
+if comp.enabled
+    %compensated frames can place lines up to a few pixels outside the raster;
+    %crop to the raster superpixels so that every trial of a path keeps the
+    %same output grid (SILo stacks trials by their top-left corner)
+    [trimRows, trimCols] = rasterExtent(S2data);
+else
+    trimRows = find(~all(isnan(Y(:,:,1)),2), 1, 'first'):find(~all(isnan(Y(:,:,1)),2), 1, 'last');
+    trimCols = find(~all(isnan(Y(:,:,1)),1), 1, 'first'):find(~all(isnan(Y(:,:,1)),1), 1, 'last');
+end
 Y = Y(trimRows, trimCols,:); freshness = freshness(trimRows, trimCols,:);
 sz = size(Y);
 
@@ -257,6 +268,7 @@ clear Y Yhp;
 initR = 0; initC = 0;
 DSframes = ceil(firstLine:dt:lastLine);
 nDSframes= length(DSframes); %number of downsampled frames
+DSref = frameRefOffsets(comp, DSframes, ceil(dt)); %each frame's reference offset when compensating
 
 %for spatial downsampling, used to calculate alignment quality and for quicker visualization
 dsTimes = 2;
@@ -294,11 +306,11 @@ sumMeanIM = zeros(numChannels, szOut(1), szOut(2), 'single');
 nMeanIM = zeros(numChannels, szOut(1), szOut(2), 'single');
 try
     for DSframeIx = 1:nDSframes
-        [M1, freshness] = getImageWrapper(S2data, 1, DSframes(DSframeIx), ceil(dt), 1, spTypeFlag); %moving image Ch1
+        [M1, freshness] = getImageWrapper(S2data, 1, DSframes(DSframeIx), ceil(dt), 1, spTypeFlag, comp, DSref(DSframeIx,:)); %moving image Ch1
         M1 = M1(trimRows, trimCols);
         freshness = freshness(trimRows, trimCols); %image freshness, the effective number of samples that contribute to the measurement
         if numChannels==2
-            M2 =  getImageWrapper(S2data, 2, DSframes(DSframeIx), ceil(dt), 1, spTypeFlag); %moving image Ch2
+            M2 =  getImageWrapper(S2data, 2, DSframes(DSframeIx), ceil(dt), 1, spTypeFlag, comp, DSref(DSframeIx,:)); %moving image Ch2
             M2 = M2(trimRows, trimCols);
             M = sqrt(M1+M2);
         else
@@ -472,6 +484,7 @@ toSave.slap2.trimCols = aData.trimCols;
 toSave.slap2.onlineMotionXshift = aData.onlineXshift;
 toSave.slap2.onlineMotionYshift = aData.onlineYshift;
 toSave.slap2.onlineMotionZshift = aData.onlineZshift;
+toSave.slap2.onlineCompensation = compensationRecord(comp, DSref);
 if isfield(aData, 'motionDSz')
     toSave.motionDSz = aData.motionDSz;
 end
@@ -484,22 +497,88 @@ metaFilename = [datFilename(1:ix+3) '.meta'];
 meta = load(metaFilename, '-mat');
 end
 
-function [IM, freshness] = getImageWrapper(S2data, channel, frames, dt, zPlane, spTypeFlag, offsets)
+function [IM, freshness] = getImageWrapper(S2data, channel, frames, dt, zPlane, spTypeFlag, comp, refOffset)
 %getImage's frame: raster superpixels only (spTypeFlag 1) or all (0). Raster
 %frames of SLAP2 recordings come from slap2Frames, which forms the same image
-%several times faster than getImage. offsets (getLineOnlineOffsets output),
-%when given, form the frame with the online motion correction undone.
-if nargin < 7, offsets = []; end
-if spTypeFlag == 1 && isprop(S2data, 'hMultiDataFiles')
+%several times faster than getImage. With comp enabled (see
+%setupCompensation), the frame's lines are first moved by their online offsets
+%relative to refOffset, the frame's own offset (frameRefOffsets): the frame
+%stays in the DMD coordinates of the uncompensated frame, but lines on another
+%offset no longer blur it.
+if nargin < 7, comp = struct('enabled', false); end
+if comp.enabled
     [IM, freshness] = slap2Frames(S2data, channel, frames, dt, ZIdx = zPlane, ...
-        CompensateOnline = ~isempty(offsets), Offsets = offsets);
+        CompensateOnline = true, Offsets = comp.offsets, RefOffset = refOffset, Mapping = comp.mapping);
     return
 end
-assert(isempty(offsets), 'MultiRoiRegistration:compensationNeedsRaster', ...
-    'Undoing the online motion correction needs raster-only frames of a SLAP2 recording.');
+if spTypeFlag == 1 && hasLineData(S2data)
+    [IM, freshness] = slap2Frames(S2data, channel, frames, dt, ZIdx = zPlane);
+    return
+end
 if spTypeFlag
     [IM,~,freshness] = S2data.getImage(channel, frames, dt, zPlane, spTypeFlag);
 else
     [IM,~,freshness] = S2data.getImage(channel, frames, dt, zPlane); %for backward compatibility
+end
+end
+
+function comp = setupCompensation(S2data, params, spTypeFlag, fnW)
+%whether and how to undo the online motion correction (params.compensateOnline):
+%only for raster frames of SLAP2 recordings, whose line headers hold the offsets
+comp = struct('enabled', false);
+if ~isfield(params, 'compensateOnline') || ~params.compensateOnline
+    return
+end
+if spTypeFlag ~= 1 || ~hasLineData(S2data)
+    warning('MultiRoiRegistration:noCompensation', ...
+        '%s: the online motion correction can only be undone for raster superpixels of SLAP2 recordings; registering without it.', fnW);
+    return
+end
+comp.enabled = true;
+comp.offsets = getLineOnlineOffsets(S2data);
+comp.refOffset = comp.offsets.medianXY;
+comp.mapping = [0 1; 1 0]; %rows follow yOffset_pix, columns xOffset_pix
+fprintf('%s: undoing the online motion correction (%d x/y switches)\n', fnW, numel(comp.offsets.xySwitchLines));
+end
+
+function [rows, cols] = rasterExtent(S2data)
+%the image rows and columns spanned by the raster superpixels of fast-z plane 1
+M = S2data.hMultiDataFiles;
+NR = double(M.header.dmdPixelsPerRow);
+nPx = NR * double(M.header.dmdPixelsPerColumn);
+lines = find(M.lineFastZIdxs == 1);
+ids = cellfun(@(x) double(x(:)), M.lineSuperPixelIDs(lines), 'UniformOutput', false);
+ids = vertcat(ids{:}) + 1;
+ids = ids(ids <= nPx);
+r = floor((ids - 1) / NR) + 1; c = mod(ids - 1, NR) + 1;
+rows = min(r):max(r); cols = min(c):max(c);
+end
+
+function tf = hasLineData(S2data)
+%whether the reader exposes SLAP2 line data (the real reader always does)
+tf = isprop(S2data, 'hMultiDataFiles') && ~isempty(S2data.hMultiDataFiles);
+end
+
+function ref = frameRefOffsets(comp, frames, dt)
+%each frame's own online offset, nFrames x 2 (empty when not compensating)
+ref = zeros(numel(frames), 0);
+if comp.enabled
+    ref = frameOnlineOffsets(comp.offsets, frames, dt);
+end
+end
+
+function rec = compensationRecord(comp, DSref)
+%the slap2/onlineCompensation group of the alignment file. With compensation,
+%each DS frame was formed with its lines moved to the frame's own offset
+%frameRefX/Y, and motionDSr/c are relative to that frame's DMD coordinates as
+%without compensation. The continuous motion relative to refOffset's frame is
+%motionDS + mapping*([frameRefX; frameRefY] - refOffset').
+rec = struct('enabled', int8(comp.enabled));
+if comp.enabled
+    rec.refOffset = comp.refOffset;
+    rec.frameRefX = int16(DSref(:,1)');
+    rec.frameRefY = int16(DSref(:,2)');
+    rec.mapping = comp.mapping;
+    rec.yLead = comp.offsets.yLead;
 end
 end

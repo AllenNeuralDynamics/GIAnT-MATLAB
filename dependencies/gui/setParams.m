@@ -39,6 +39,7 @@ switch fnName
         params.refStackTemplate = false; tooltips.refStackTemplate = 'Use ref stack as template';
         params.isReVolt = false; tooltips.isReVolt = 'select true for recordings with simultaneous red 1P imaging';
         params.includeIntegrationROIs = false; tooltips.includeIntegrationROIs = 'Use integration ROIs for alignment and TIFF generation?';
+        params.compensateOnline = false; tooltips.compensateOnline = 'SLAP2: undo the online motion correction line by line, so that frames spanning a change of the DMD offset are not blurred (raster superpixels only)';
     case 'BandRegistration'
         params.alignHz = 80; tooltips.alignHz = 'Frequency for generating downsampled aligned tiffs';
         params.maxshiftXY = 25; tooltips.maxshift = 'Maximum frame offset,in pixels';

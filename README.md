@@ -166,7 +166,14 @@ The motion correction scripts save out a H5 file ending in `_ALIGNMENTDATA.h5` t
     ├ 🖼️ viewC             (MultiRoiRegistration only)
     ├ 🖼️ viewR             (MultiRoiRegistration only)
     ├ 🔢 trimRows          (MultiRoiRegistration only)
-    └ 🔢 trimCols          (MultiRoiRegistration only)
+    ├ 🔢 trimCols          (MultiRoiRegistration only)
+    └ 📁 onlineCompensation (MultiRoiRegistration only)
+       ├ ☑️ enabled
+       ├ 🔢 refOffset       (when enabled)
+       ├ 🔢 frameRefX       (when enabled)
+       ├ 🔢 frameRefY       (when enabled)
+       ├ 🔢 mapping         (when enabled)
+       └ 🔢 yLead           (when enabled)
 ```
 
 ### Manual Annotations
@@ -360,6 +367,11 @@ Top-level fields written by **all three** motion correction scripts: `numChannel
 | `slap2/onlineMotionXshift` | 1 x nDSframes | numeric | Online motion-correction X shift from the microscope |
 | `slap2/onlineMotionYshift` | 1 x nDSframes | numeric | Online motion-correction Y shift from the microscope |
 | `slap2/onlineMotionZshift` | 1 x nDSframes | numeric | Online motion-correction Z shift from the microscope |
+| `slap2/onlineCompensation/enabled` | 1 x 1 | bool | (MultiRoiRegistration only) Whether registration undid the online motion correction line by line (`compensateOnline`). The fields below are written only when it did |
+| `slap2/onlineCompensation/frameRefX`, `frameRefY` | 1 x nDSframes | integer | Each DS frame's own online offset (kernel-weighted mean over its lines, rounded). Every line of the frame was moved by its online offset relative to this, so the frame is in the DMD coordinates of the uncompensated frame without mixing offsets, and `motionDSr`/`motionDSc` keep their meaning |
+| `slap2/onlineCompensation/refOffset` | 1 x 2 | integer | Reference offset [x y] (the trial's median). The continuous tissue motion relative to this offset's frame is `motionDS` + `mapping` · ([`frameRefX`; `frameRefY`] − `refOffset`′) |
+| `slap2/onlineCompensation/mapping` | 2 x 2 | numeric | Maps an offset difference [dx; dy] to the [row; col] displacement of a line's samples (`[0 1; 1 0]`: rows follow y, columns follow x) |
+| `slap2/onlineCompensation/yLead` | 1 x 2 | integer | Lines by which a new y offset reaches the DMD before the header records it: when x is unchanged, and when x changes too (see `getLineOnlineOffsets`) |
 
 ### `bandRegLookupTable.h5`
 
