@@ -481,6 +481,8 @@ String fields are stored as UTF-16 code units (`uint16`) for robust MATLAB/Pytho
   3. Maxima above `params.wmfPeakth` are candidate seeds. A candidate within 6 px of a stronger one is merged into it unless the filtered image dips by `params.wmfDip` between them, both for all trials and for each half of the trials. So two sources are kept apart only where they are resolved reproducibly.
   4. Each seed sits at the centroid of the combined image around its maximum, and must be active in at least 2 trials.
 
+  With fewer than 4 trials (for example one long recording), the halves can't be tested: nearby maxima need only the dip in the combined image to stay apart, and a seed need only be active in one trial.
+
 On a 39-trial SLAP2 session with two imaging paths:
 
 - **Fewer near-duplicate seeds.** `'wmf'` left 2 and 7 seeds with another seed closer than 3 px, against 59 and 43 for `'getActImPeaks'`.

@@ -28,10 +28,17 @@ function [seeds, info] = findSourcesWMF(actT, params)
 %   6. A seed must show activity (its trial's z image smoothed with a 1 px
 %      Gaussian, above ZPRES within 1 px) in at least MINTRIALS trials.
 %
+%   With fewer than 2*MINHALF imaged trials (e.g. one long recording), the
+%   halves are too noisy to test and a source may be active in only some of
+%   so few trials: two maxima need only the dip in F to stay apart, and a seed
+%   need only be active in one trial. On synthetic images this keeps more
+%   sources at 2-3 trials than requiring activity in 2 of them, with no extra
+%   seeds and no split sources.
+%
 %   INFO: Z, F, K, R, and per seed the value of F (value) and the number of
 %   trials it is active in (nTrials).
 
-MERGEPX = 6; ZPRES = 4; MINTRIALS = 2;
+MERGEPX = 6; ZPRES = 4; MINTRIALS = 2; MINHALF = 2;
 [H, W, T] = size(actT);
 seeds = zeros(0, 2); info = struct('Z', [], 'F', [], 'K', [], 'R', [], 'value', zeros(0, 1), 'nTrials', zeros(0, 1));
 if T == 0 || all(isnan(actT(:)))
@@ -46,10 +53,18 @@ for t = 1:T
     zT(:, :, t) = robustZ(a - nanmedfilt2(a, [5 5]));
     zS(:, :, t) = robustZ(filtNan(zT(:, :, t), g));
 end
+imaged = find(squeeze(any(~isnan(zT), [1 2])))';
+useHalves = numel(imaged) >= 2*MINHALF;
+minTrials = MINTRIALS;
+if ~useHalves
+    minTrials = 1;
+end
 Z = combineTrials(zT, params.nanThresh);
 [F, K, R] = wmfImage(Z);
-Fh = {wmfImage(combineTrials(zT(:, :, 1:2:end), params.nanThresh)), ...
-      wmfImage(combineTrials(zT(:, :, 2:2:end), params.nanThresh))};
+if useHalves
+    Fh = {wmfImage(combineTrials(zT(:, :, imaged(1:2:end)), params.nanThresh)), ...
+          wmfImage(combineTrials(zT(:, :, imaged(2:2:end)), params.nanThresh))};
+end
 
 E = F; E(isnan(E)) = -inf;
 [r, c] = find(E == ordfilt2(E, 9, ones(3)) & E > params.wmfPeakth);
@@ -63,7 +78,7 @@ for i = 2:numel(r)
         tt = linspace(0, 1, max(3, ceil(4*d)));
         xs = c(i) + tt*(c(j) - c(i)); ys = r(i) + tt*(r(j) - r(i));
         resolved = v(i) - min(interp2(F, xs, ys)) >= params.wmfDip;
-        for h = 1:2
+        for h = 1:2*useHalves
             ln = interp2(Fh{h}, xs, ys);
             resolved = resolved && min(ln(1), ln(end)) - min(ln) >= params.wmfDip/sqrt(2);
         end
@@ -94,7 +109,7 @@ for t = 1:T
     zm = ordfilt2(z, 9, ones(3));
     nTrials = nTrials + (zm(ix) > ZPRES);
 end
-ok = nTrials >= MINTRIALS;
+ok = nTrials >= minTrials;
 seeds = seeds(ok, :);
 info = struct('Z', Z, 'F', F, 'K', K, 'R', R, 'value', v(ok), 'nTrials', nTrials(ok));
 end

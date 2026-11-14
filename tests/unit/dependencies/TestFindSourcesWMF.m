@@ -15,6 +15,10 @@ classdef TestFindSourcesWMF < matlab.unittest.TestCase
         Amp = 4 % mean source peak, in units of the per-trial noise SD (weaker sources are often too faint in single trials to pass the 2-trial activity check)
     end
 
+    properties (TestParameter)
+        nFew = struct('oneTrial', 1, 'twoTrials', 2, 'threeTrials', 3)
+    end
+
     methods (TestClassSetup)
         function addPaths(testCase)
             import matlab.unittest.fixtures.PathFixture
@@ -84,6 +88,23 @@ classdef TestFindSourcesWMF < matlab.unittest.TestCase
             act(:, :, 3) = act(:, :, 3) + 30*exp(-((R - c(1)).^2 + (C - c(2)).^2)/(2*1.2^2));
             seeds = findSourcesWMF(act, TestFindSourcesWMF.params());
             testCase.verifyGreaterThan(min(hypot(seeds(:, 1) - c(1), seeds(:, 2) - c(2))), 3);
+        end
+
+        function testFewTrials(testCase, nFew)
+            % below 4 trials (e.g. one long recording) there are no halves to
+            % test and sources need be active in only one trial; strong
+            % sources, as in a long trial, are all found, and the elongated
+            % source is still one seed
+            src = TestFindSourcesWMF.grid();
+            act = TestFindSourcesWMF.simulate(src, 4*ones(size(src, 1), 1), nFew);
+            c = [48.3 48.6];
+            [C, R] = meshgrid(1:TestFindSourcesWMF.Sz(2), 1:TestFindSourcesWMF.Sz(1));
+            act = act + 8*TestFindSourcesWMF.Amp*exp(-((R - c(1)).^2/(2*1.1^2) + (C - c(2)).^2/(2*3^2)));
+            seeds = findSourcesWMF(act, TestFindSourcesWMF.params());
+            testCase.verifyLessThan(max(TestFindSourcesWMF.nearest(src, seeds)), 1, 'every source has a seed within 1 px');
+            near = hypot(seeds(:, 1) - c(1), seeds(:, 2) - c(2)) < 6;
+            testCase.verifyEqual(nnz(near), 1, 'one seed on the elongated source');
+            testCase.verifyEqual(size(seeds, 1), size(src, 1) + 1, 'no extra seeds');
         end
 
         function testNoImagedPixels(testCase)
