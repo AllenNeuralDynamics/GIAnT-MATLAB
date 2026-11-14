@@ -70,6 +70,21 @@ classdef TestCompensatedExtraction < matlab.unittest.TestCase
             testCase.verifyLessThan(rk, 0.04);
         end
 
+        function testCompensatedExtractionKeepsEdgeSamples(testCase)
+            % each block's frames are formed around the block's median offset,
+            % which moves the samples of frames on another offset past the
+            % raster's bounding box; they must still be read rather than filled
+            % in as missing (the loader gives filled samples a variance
+            % multiplier 1000 times the mean)
+            testCase.writeAcquisition();
+            [aU, aK, selPix] = testCase.registerBoth(1);
+            [~, Fu] = testCase.extract(aU, selPix);
+            [~, Fk] = testCase.extract(aK, selPix);
+            filled = @(F) nnz(F > 100 * median(F(:), 'omitnan'));
+            testCase.log(1, sprintf('filled samples: compensated %d, uncompensated %d (of %d)', filled(Fk), filled(Fu), numel(Fu)));
+            testCase.verifyLessThanOrEqual(filled(Fk), filled(Fu) + 0.001 * numel(Fu));
+        end
+
         function testExtractionWithoutSwitchesUnchanged(testCase)
             % with a constant online offset, compensation changes nothing
             testCase.writeAcquisition('updateEvery', 1e9);
@@ -91,14 +106,18 @@ classdef TestCompensatedExtraction < matlab.unittest.TestCase
         function [Yu, Yk] = extractBoth(testCase)
             % register without and with compensation, then extract both at the
             % same pixels: the interior of the area both imaged
+            [aU, aK, selPix] = testCase.registerBoth(7);
+            Yu = testCase.extract(aU, selPix);
+            Yk = testCase.extract(aK, selPix);
+        end
+
+        function [aU, aK, selPix] = registerBoth(testCase, erodeSize)
             aU = testCase.register(false);
             aK = testCase.register(true);
             testCase.verifyEqual(double(aK.slap2.trimRows), double(aU.slap2.trimRows)); % same output grid
             testCase.verifyEqual(double(aK.slap2.trimCols), double(aU.slap2.trimCols));
             valid = @(a) isfinite(squeeze(a.meanIM(1, :, :)));
-            selPix = imerode(valid(aU) & valid(aK), strel('square', 7));
-            Yu = testCase.extract(aU, selPix);
-            Yk = testCase.extract(aK, selPix);
+            selPix = imerode(valid(aU) & valid(aK), strel('square', erodeSize));
         end
 
         function aData = register(testCase, compensate)
@@ -110,7 +129,7 @@ classdef TestCompensatedExtraction < matlab.unittest.TestCase
             testCase.verifyEqual(double(aData.slap2.onlineCompensation.enabled), double(compensate));
         end
 
-        function Y = extract(testCase, aData, selPix)
+        function [Y, Finv] = extract(testCase, aData, selPix)
             meanIM = permute(aData.meanIM, [2 3 1]); % alignment files store channels first; SILo's mean image is rows x cols x channels
             [r, c] = find(selPix);
             sources = struct('R', r, 'C', c, 'V', ones(size(r)));
@@ -129,6 +148,7 @@ classdef TestCompensatedExtraction < matlab.unittest.TestCase
                 {false}, {aData}, meanIM, zeros(2, 1), {}, 1, params);
             S = load(out);
             Y = S.Y_obs;
+            Finv = S.Finv;
         end
 
         function writeAcquisition(testCase, varargin)

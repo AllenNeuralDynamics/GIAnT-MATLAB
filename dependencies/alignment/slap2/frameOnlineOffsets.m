@@ -12,9 +12,10 @@ function o = frameOnlineOffsets(off, times, dt)
 %   unchanged, and in a frame that spans one, the lines on the minority offset
 %   are moved to the majority's.
 
-x = double(off.x(:));
-y = double(off.y(:));
-if isfield(off, 'yEff'), y = double(off.yEff(:)); end
+% the offset arrays span the whole recording; convert only each frame's lines
+x = off.x;
+y = off.y;
+if isfield(off, 'yEff'), y = off.yEff; end
 n = numel(x);
 P = double(off.linesPerCycle);
 dtRead = max(3 * dt, P);
@@ -22,6 +23,6 @@ o = zeros(numel(times), 2);
 for f = 1:numel(times)
     lns = max(1, ceil(times(f) - dtRead)):min(n, floor(times(f) + dtRead));
     w = exp(-abs(times(f) - lns(:)) / dt);
-    o(f, :) = round([w' * x(lns), w' * y(lns)] / sum(w));
+    o(f, :) = round([w' * double(x(lns(:))), w' * double(y(lns(:)))] / sum(w));
 end
 end
