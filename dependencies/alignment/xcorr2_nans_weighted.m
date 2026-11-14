@@ -8,6 +8,12 @@ function [motion, R] = xcorr2_nans_weighted(frame, freshness, template, shiftsCe
 
 %shiftsCenter: the center offset around which to perform a local search
 %dShift: the maximum shift (scalar, in pixels) to consider on each axis around shiftsCenter
+%freshness: the weight of each frame pixel. For each shift, the correlation
+%is the freshness-weighted Pearson correlation over the pixels valid in both
+%images: weighted means, variances and covariance, so that a pixel's influence
+%is set by its weight alone. (Mixing unweighted means and template variance
+%with weighted sums biased the peak when the set of compared pixels changed
+%with the shift, e.g. on thin raster ribbons.)
 
 sz= size(template);
 dShift = round(dShift(1)); %sanity check
@@ -37,11 +43,12 @@ for drix = 1:length(shifts)
         F = F0(valid); F = F(sel);
         Ff = Ff0(valid); Ff = Ff(sel);
 
-        dF = F-mean(F); dT = T-mean(T);
-        sFT = sum(Ff.*dF.*dT); %./sum(Ff);
-        sT = mean(dT.^2);
-        sF = sum(Ff.*dF.^2); %./sum(Ff);
-        C(drix,dcix) = sFT./sqrt(sT.*sF.*sum(Ff));
+        sw = sum(Ff);
+        dF = F - sum(Ff.*F)/sw; dT = T - sum(Ff.*T)/sw; %weighted means
+        sFT = sum(Ff.*dF.*dT);
+        sT = sum(Ff.*dT.^2);
+        sF = sum(Ff.*dF.^2);
+        C(drix,dcix) = sFT./sqrt(sT.*sF);
     end
 end
 

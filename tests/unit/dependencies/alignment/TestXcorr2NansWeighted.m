@@ -128,6 +128,58 @@ classdef TestXcorr2NansWeighted < matlab.unittest.TestCase
             testCase.verifyGreaterThan(R, Runweighted);
         end
 
+        function testZeroWeightPixelsHaveNoEffect(testCase)
+            % pixels with zero freshness do not enter the weighted means and
+            % variances: changing their values changes nothing
+            d = [1 -2];
+            frame = testCase.shiftedFrame(testCase.Template, d);
+            freshness = 0.5 + rand(RandStream('mt19937ar', 'Seed', 5), size(frame));
+            zeroCols = 36:45;
+            freshness(:, zeroCols) = 0;
+            [motion1, R1] = xcorr2_nans_weighted(frame, freshness, testCase.Template, [0; 0], 3);
+            frame2 = frame;
+            frame2(testCase.Roi, zeroCols) = 1000 + 50*frame(testCase.Roi, zeroCols);
+            [motion2, R2] = xcorr2_nans_weighted(frame2, freshness, testCase.Template, [0; 0], 3);
+            testCase.verifyEqual(motion2, motion1, 'AbsTol', 1e-9);
+            testCase.verifyEqual(R2, R1, 'AbsTol', 1e-9);
+        end
+
+        function testThinRibbonsWithWeightedRim(testCase)
+            % Thin diagonal ribbons of a texture elongated along them; the
+            % template is NaN outside the ribbons, and the frame has an extra
+            % low-weight rim around them (as frames with moved lines do), so
+            % the set of compared pixels changes with the shift. Mixing
+            % unweighted means and template variance with weighted sums
+            % missed the shift here by up to 1.4 px.
+            sz = [80 80];
+            [c, r] = meshgrid(1:sz(2), 1:sz(1));
+            u = (r + c)/sqrt(2); v = (r - c)/sqrt(2);
+            err = zeros(1, 10);
+            for seed = 1:10
+                s = RandStream('mt19937ar', 'Seed', seed);
+                tex = zeros(sz);
+                for k = 1:30
+                    tex = tex + randn(s)*exp(-((u - 120*rand(s)).^2/40 + (v - 60*rand(s) + 30).^2/2));
+                end
+                tex = 50 + 20*tex;
+                ribbon = false(sz);
+                for k = 1:4
+                    ribbon = ribbon | abs(v - (-30 + 15*k)) <= 1.5;
+                end
+                ribbon([1:6 end-5:end], :) = false; ribbon(:, [1:6 end-5:end]) = false;
+                d = [1 -1].*randi(s, [0 2], 1, 2);
+                template = tex; template(~ribbon) = nan;
+                inFrame = circshift(ribbon, d);
+                rim = imdilate(inFrame, ones(3)) & ~inFrame;
+                frame = circshift(tex, d); frame(~(inFrame | rim)) = nan;
+                freshness = zeros(sz);
+                freshness(inFrame) = 0.5 + rand(s, nnz(inFrame), 1);
+                freshness(rim) = 0.1 + 0.2*rand(s, nnz(rim), 1);
+                err(seed) = norm(xcorr2_nans_weighted(frame, freshness, template, [0; 0], 3) - d);
+            end
+            testCase.verifyLessThan(max(err), 0.2);
+        end
+
         function testRoundsDShift(testCase)
             frame = testCase.shiftedFrame(testCase.Template, [1 -2]);
             freshness = ones(size(frame));
@@ -140,8 +192,8 @@ classdef TestXcorr2NansWeighted < matlab.unittest.TestCase
         end
 
         function testMatchesPerPixelReference(testCase)
-            % Identical results to the per-pixel (find/sub2ind) implementation
-            % it replaced, on frames with NaN borders and holes, nonuniform
+            % Identical results to a per-pixel (find/sub2ind) implementation of
+            % the weighted correlation, on frames with NaN borders and holes, nonuniform
             % freshness, offset search centers and shifts past the edge.
             stream = RandStream('mt19937ar', 'Seed', 3);
             for rep = 1:12
@@ -187,7 +239,7 @@ classdef TestXcorr2NansWeighted < matlab.unittest.TestCase
 end
 
 function [motion, R] = perPixelReference(frame, freshness, template, shiftsCenter, dShift)
-% xcorr2_nans_weighted before it took overlapping blocks per shift
+% the freshness-weighted Pearson correlation, pixel by pixel
 sz = size(template);
 dShift = round(dShift(1));
 template = circshift(template, shiftsCenter);
@@ -205,10 +257,8 @@ for drix = 1:length(shifts)
         indsF = sub2ind(sz, Fr(sel), Fc(sel));
         F = frame(indsF);
         Ff = freshness(indsF);
-        sFT = sum(Ff.*(F-mean(F)).*(T-mean(T)));
-        sT = mean((T-mean(T)).^2);
-        sF = sum(Ff.*(F-mean(F)).^2);
-        C(drix,dcix) = sFT./sqrt(sT.*sF.*sum(Ff));
+        mF = sum(Ff.*F)/sum(Ff); mT = sum(Ff.*T)/sum(Ff);
+        C(drix,dcix) = sum(Ff.*(F-mF).*(T-mT))./sqrt(sum(Ff.*(T-mT).^2).*sum(Ff.*(F-mF).^2));
     end
 end
 [maxval, I] = max(C(:));
