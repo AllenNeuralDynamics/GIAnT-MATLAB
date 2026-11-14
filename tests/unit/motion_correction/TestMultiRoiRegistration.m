@@ -99,6 +99,22 @@ classdef TestMultiRoiRegistration < matlab.unittest.TestCase
             testCase.verifyEqual(double(aData.slap2.cropCol), testCase.RoiRows(1) - testCase.MaxShift);
         end
 
+        function testRecNegErrForShortRecording(testCase)
+            % A recording shorter than one 10 s chunk still gets a
+            % reconstruction error for every frame (it used to get none).
+            name = 'acq_DMD1-TRIAL000001.dat';
+            testCase.writeAcquisition(name);
+            testCase.writeTrialTable({name});
+
+            tt = testCase.runRegistration();
+
+            aData = testCase.loadAlignmentData(tt);
+            nFrames = numel(testCase.expectedDSframes());
+            testCase.assertLessThan(nFrames, 10*testCase.AlignHz);
+            testCase.verifyNumElements(aData.recNegErr, nFrames);
+            testCase.verifyTrue(all(isfinite(aData.recNegErr(:))));
+        end
+
         function testRecoverKnownShift(testCase)
             name = 'acq_DMD1-TRIAL000001.dat';
             shiftLine = 0.75*testCase.NumLines;
