@@ -125,7 +125,7 @@ numChannels = S2data.numChannels;
 minSamps = 15; %minimimum number of samples to include in template
 
 %undo the online motion correction line by line (raster SLAP2 frames only)
-comp = setupCompensation(S2data, params, spTypeFlag, fnW);
+comp = setupCompensation(S2data, params, spTypeFlag, fnW, [firstLine lastLine], dt);
 
 if params.isReVolt
     numChannels = 1;
@@ -522,9 +522,10 @@ else
 end
 end
 
-function comp = setupCompensation(S2data, params, spTypeFlag, fnW)
+function comp = setupCompensation(S2data, params, spTypeFlag, fnW, lines, dt)
 %whether and how to undo the online motion correction (params.compensateOnline):
-%only for raster frames of SLAP2 recordings, whose line headers hold the offsets
+%only for raster frames of SLAP2 recordings, whose line headers hold the offsets.
+%Only the line headers of this trial's lines (plus the frames' kernel) are read.
 comp = struct('enabled', false);
 if ~isfield(params, 'compensateOnline') || ~params.compensateOnline
     return
@@ -535,8 +536,9 @@ if spTypeFlag ~= 1 || ~hasLineData(S2data)
     return
 end
 comp.enabled = true;
-comp.offsets = getLineOnlineOffsets(S2data);
-comp.refOffset = comp.offsets.medianXY;
+margin = 2 * max(3 * ceil(dt), double(S2data.hMultiDataFiles.header.linesPerCycle)) + 8;
+comp.offsets = getLineOnlineOffsets(S2data, Lines = [lines(1) - margin, lines(2) + margin]);
+comp.refOffset = comp.offsets.medianXY; %over the lines read
 comp.mapping = [0 1; 1 0]; %rows follow yOffset_pix, columns xOffset_pix
 fprintf('%s: undoing the online motion correction (%d x/y switches)\n', fnW, numel(comp.offsets.xySwitchLines));
 end

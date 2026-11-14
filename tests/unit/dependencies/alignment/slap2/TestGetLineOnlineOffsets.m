@@ -66,6 +66,30 @@ classdef TestGetLineOnlineOffsets < matlab.unittest.TestCase
             testCase.verifyEqual(off3.yEff, expected);
         end
 
+        function testReadsOnlyRequestedLines(testCase)
+            % Lines reads only the cycles covering the requested lines (widened
+            % by the y lead) and matches a full read on those lines
+            P = 10; n = 200;
+            rng(3);
+            x = int16(cumsum(rand(n, 1) < 0.05)); y = int16(cumsum(rand(n, 1) < 0.07));
+            z = single((1:n)'); pend = rand(n, 1) < 0.1; pin = rand(n, 1) < 0.1;
+            h = 1:100; t = 101:n;
+            D1 = TestGetLineOnlineOffsets.makeFile(P, x(h), y(h), z(h), pend(h), pin(h), 40);
+            D2 = TestGetLineOnlineOffsets.makeFile(P, x(t), y(t), z(t), pend(t), pin(t), 40);
+            S = struct('hMultiDataFiles', struct('hDataFiles', [D1 D2]));
+            whole = getLineOnlineOffsets(S);
+            part = getLineOnlineOffsets(S, Lines = [95 130]);
+            in = 95:130;
+            for f = {'x', 'y', 'z', 'syncPending', 'dmdSyncPin', 'yEff'}
+                testCase.verifyEqual(part.(f{1})(in), whole.(f{1})(in), f{1});
+            end
+            testCase.verifyEqual(part.numLines, n);
+            testCase.verifyEqual(part.linesRead, [81 140]); % cycles 9-14 cover lines 88-137
+            testCase.verifyEqual(part.x(1:80), repmat(part.x(81), 80, 1));
+            testCase.verifyEqual(part.x(141:end), repmat(part.x(140), 60, 1));
+            testCase.verifyEqual(whole.linesRead, [1 n]);
+        end
+
         function testHeadersWithoutZ(testCase)
             P = 2; n = 4;
             D = TestGetLineOnlineOffsets.makeFile(P, int16((1:n)'), int16((1:n)'), single(ones(n, 1)), false(n, 1), false(n, 1), 32);

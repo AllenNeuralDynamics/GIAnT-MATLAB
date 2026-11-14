@@ -113,7 +113,8 @@ if params.isSLAP2
         %reference) gives the continuous tissue motion, which is what can be
         %interpolated. Frames are then formed compensated, per block, around the
         %block's typical offset (see onlineCompensation).
-        [comp, motionDSr, motionDSc] = onlineCompensation(alignDataSlap2, alignData, S2data);
+        lineRange = [min(startLine, alignData.DSframes(1)), max(endLine, alignData.DSframes(end))];
+        [comp, motionDSr, motionDSc] = onlineCompensation(alignDataSlap2, alignData, S2data, lineRange, linerateHz);
         if numel(alignData.DSframes) > 1
             motionC = interp1(alignData.DSframes, motionDSc, frameLines, 'pchip', 'extrap') + motOutput(2);
             motionR = interp1(alignData.DSframes, motionDSr, frameLines, 'pchip', 'extrap') + motOutput(1);
@@ -379,16 +380,18 @@ Yq = permute(num ./ den, [1 3 2]);
 Fq = 1 ./ den; Fq(isinf(Fq)) = nan;
 end
 
-function [comp, motionDSr, motionDSc] = onlineCompensation(alignDataSlap2, alignData, S2)
+function [comp, motionDSr, motionDSc] = onlineCompensation(alignDataSlap2, alignData, S2, lineRange, linerateHz)
 %the online-compensation settings registration used (empty without), and the
 %DS motion to interpolate: as saved, or with compensation the continuous
-%motion relative to the frame of the reference offset
+%motion relative to the frame of the reference offset. Only the line headers
+%of lineRange (plus the registration frames' kernel) are read.
 motionDSr = double(alignData.motionDSr); motionDSc = double(alignData.motionDSc);
 comp = [];
 if ~isfield(alignDataSlap2, 'onlineCompensation'), return, end
 oc = alignDataSlap2.onlineCompensation;
 if ~isfield(oc, 'enabled') || ~logical(oc.enabled), return, end
-off = getLineOnlineOffsets(S2, YLead = double(oc.yLead(:))');
+margin = 2 * max(3 * ceil(linerateHz / double(alignData.alignHz)), double(S2.hMultiDataFiles.header.linesPerCycle)) + 8;
+off = getLineOnlineOffsets(S2, YLead = double(oc.yLead(:))', Lines = double(lineRange) + [-margin margin]);
 map = double(oc.mapping); ref = double(oc.refOffset(:))';
 d = map * ([double(oc.frameRefX(:))'; double(oc.frameRefY(:))'] - ref');   %[row; col] per DS frame
 motionDSr = reshape(motionDSr, 1, []) + d(1, :);
