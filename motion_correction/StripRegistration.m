@@ -262,7 +262,7 @@ end
 offset = max(0, prctile(template(:), 25));
 recNegErr = nan(1,nDSframes);
 nChunks = ceil(nDSframes./(aData.alignHz*10)); %align 10 seconds at a time
-chunkEdges = round(linspace(1, nDSframes+1, nChunks));
+chunkEdges = round(linspace(1, nDSframes+1, nChunks+1)); %nChunks chunks of at most 10 s
 for chunkIx = 1:length(chunkEdges)-1
     t_ixs = chunkEdges(chunkIx):chunkEdges(chunkIx+1)-1;
     chunkData = A_ds(:,:,t_ixs);
