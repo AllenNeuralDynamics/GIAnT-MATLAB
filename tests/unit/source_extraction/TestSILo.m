@@ -113,6 +113,30 @@ classdef TestSILo < matlab.unittest.TestCase
             end
         end
 
+        function testWmfSeedsFindSourcesAtActivityBlobs(testCase)
+            % peakMethod 'wmf' seeds from the trials' aligned activity images
+            testCase.writeDataset(1);
+
+            params = testCase.runSILo(testCase.Dr, struct('peakMethod', 'WMF'));
+
+            testCase.verifyEqual(params.peakMethod, 'wmf');
+            args = testCase.loadExtractorArgs();
+            src = [args.sources.R(:) args.sources.C(:)];
+            testCase.assertNotEmpty(src);
+            expected = testCase.expectedSourcePositions(args.motOutput);
+            dist = sqrt((src(:,1) - expected(:,1)').^2 + (src(:,2) - expected(:,2)').^2);
+            testCase.verifyLessThanOrEqual(min(dist, [], 1), 1.5*ones(1, size(expected, 1)), ...
+                'every blob should have a source');
+            testCase.verifyEqual(size(src, 1), size(expected, 1), 'one source per blob');
+        end
+
+        function testRejectsUnknownPeakMethod(testCase)
+            testCase.writeDataset(1);
+
+            testCase.verifyError(@() testCase.runSILo(testCase.Dr, struct('peakMethod', 'gaussfit')), ...
+                'SILo:peakMethod');
+        end
+
         function testWritesSummariesAndTrialTable(testCase)
             testCase.writeDataset(1);
 

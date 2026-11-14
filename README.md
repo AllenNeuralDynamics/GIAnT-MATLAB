@@ -470,6 +470,24 @@ String fields are stored as UTF-16 code units (`uint16`) for robust MATLAB/Pytho
 | `Path{n}/sources/temporal` | — | group | Per-trial source metrics |
 | `Path{n}/sources/temporal/per_trial_SNR` | trials x sources | numeric | Per-source SNR for each analysis trial |
 
+#### Seeding sources
+
+`params.peakMethod` sets how SILo seeds sources before extracting them.
+
+- **`'getActImPeaks'` (default)** takes the maxima of `act_im` (the mean of the valid trials' aligned activity images, minus a local median) above `params.peakth` (robust z). It fits them jointly with Gaussians, adds peaks where the residual still exceeds the threshold, and drops fitted peaks that are too small. Because the fit adds a peak wherever a blob is not Gaussian, it can split one elongated or large source into seeds at its edges, with none at its centre.
+- **`'wmf'`** (`findSourcesWMF`) works from the trials' aligned activity images (`per_trial_act_im`):
+  1. Each trial's image, minus its local median, is z-scored, and the trials' mean is z-scored again.
+  2. This combined image goes through a whitened matched filter: the detection statistic for a source of the empirical shape in noise of the empirical autocorrelation. The shape is the average of patches around strong, isolated maxima. The autocorrelation is measured away from activity, and carries the correlation of the noise along scan lines.
+  3. Maxima above `params.wmfPeakth` are candidate seeds. A candidate within 6 px of a stronger one is merged into it unless the filtered image dips by `params.wmfDip` between them, both for all trials and for each half of the trials. So two sources are kept apart only where they are resolved reproducibly.
+  4. Each seed sits at the centroid of the combined image around its maximum, and must be active in at least 2 trials.
+
+On a 39-trial SLAP2 session with two imaging paths:
+
+- **Fewer near-duplicate seeds.** `'wmf'` left 2 and 7 seeds with another seed closer than 3 px, against 59 and 43 for `'getActImPeaks'`.
+- **More reproducible seeds.** In cross-validation over halves of the trials (10 splits), more of the seeds found on one half were found again on the other: 131 vs 106 and 136 vs 85 per path.
+- **Better centred.** Seeds sat closer to the other half's activity peaks: 0.24–0.32 px vs 0.40–0.42 px.
+- **More seeds overall:** 177 and 175 vs 150 and 134, so the overall agreement between halves (Dice) is similar, 0.79–0.81 vs 0.77–0.82.
+
 ## Citation
 
 If you use GIAnT, please cite:

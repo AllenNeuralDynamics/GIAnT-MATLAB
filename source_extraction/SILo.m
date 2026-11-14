@@ -10,6 +10,10 @@ else
 end
 % Fixed values; user/GUI/JSON cannot override these in SILo
 params.minBaseline = 0.01;
+params.peakMethod = lower(char(params.peakMethod));
+if ~any(strcmp(params.peakMethod, {'getactimpeaks', 'wmf'}))
+    error('SILo:peakMethod', 'params.peakMethod must be ''getActImPeaks'' or ''wmf'', not ''%s''.', params.peakMethod);
+end
 if ~nargin
     if ~isInteractiveSession()
         error('SILo:NonInteractive', 'No interactive display: pass the trial_table.h5 path (or its folder) to SILo.');
@@ -249,7 +253,14 @@ for DMDix = nDMDs:-1:1
         end
     end
 
-    thetaf = getActImPeaks(actIM,params.peakth,somaMask,params.minPeakDistance);
+    if strcmp(params.peakMethod, 'wmf')
+        %seeds from the trials' aligned activity images rather than the combined actIM
+        [seedRC, seedInfo] = findSourcesWMF(reshape(actAligned(:,:,1,validTrials), sz(1), sz(2), []), params);
+        inSoma = somaMask(sub2ind(sz, round(seedRC(:,1)), round(seedRC(:,2))));
+        thetaf = [seedInfo.value(~inSoma), seedRC(~inSoma,:)];
+    else
+        thetaf = getActImPeaks(actIM,params.peakth,somaMask,params.minPeakDistance);
+    end
 
     sources = struct('R', [], 'C', [], 'V', []);
     totalPix = sum(~isnan(actIM(:)) & ~somaMask(:));
