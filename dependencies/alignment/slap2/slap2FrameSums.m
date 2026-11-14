@@ -179,13 +179,17 @@ else
 end
 nPix = numel(pix);
 
-%the data: one contiguous block of whole cycles, or the reader's cells
+%the data: the cycles the frames use, read as runs of whole cycles, or the reader's cells
+if isfield(hdr, 'numChannels') || isprop(hdr, 'numChannels')
+    assert(all(channels <= double(hdr.numChannels)), 'slap2Frames:badChannel', ...
+        'Channels must be at most %d, the number in the recording.', double(hdr.numChannels));
+end
 useFile = strcmp(opts.Reader, 'file') || (strcmp(opts.Reader, 'auto') && hasDataFiles(M));
 if useFile
-    c1 = min(ci);
-    block = readCycles(M, c1, max(ci));
+    [block, cycleCol] = readCycles(M, unique(ci));
     rowBase = double(M.lineDataStartIdxs(:)) - double(M.lineHeaderIdxs(1));
     nPerCh = double(M.lineDataNumElements(:)) / double(hdr.numChannels);
+    c1 = min(ci);
 else
     %the reader returns channels min:max in file order
     chRange = min(channels):max(channels);
@@ -240,7 +244,7 @@ for s = 1:nS
         end
         for k = 1:nCh
             if useFile
-                Dk = double(block(rowBase(L) + (channels(k) - 1) * nPerCh(L) + sel, ci(members) - c1 + 1));
+                Dk = double(block(rowBase(L) + (channels(k) - 1) * nPerCh(L) + sel, cycleCol(ci(members) - c1 + 1)));
             else
                 Dk = double(reshape(X(sel, chCols(k), :), numel(sel), []));
             end
@@ -311,27 +315,38 @@ tf = (isprop(M, 'hDataFiles') || isfield(M, 'hDataFiles')) && ~isempty(M.hDataFi
     && (isprop(M.hDataFiles(1), 'datFileName') || isfield(M.hDataFiles(1), 'datFileName'));
 end
 
-function block = readCycles(M, firstCycle, lastCycle)
-% the raw int16 words of cycles firstCycle..lastCycle (across data files), one
-% column per cycle; word lineDataStartIdxs(L) - lineHeaderIdxs(1) + j of a
-% column is word j of line L's data in that cycle
+function [block, cycleCol] = readCycles(M, cycles)
+% the raw int16 words of the given cycles (sorted, across data files), one
+% column per cycle: column cycleCol(c - cycles(1) + 1) holds cycle c. Runs of
+% consecutive cycles are read in one go each, so frames far apart don't read
+% the cycles between them. Word lineDataStartIdxs(L) - lineHeaderIdxs(1) + j of
+% a column is word j of line L's data in that cycle.
 assert(~M.header.channelsInterleave, 'Only deinterleaved data is supported');
+cycles = cycles(:)';
+cycleCol = zeros(1, cycles(end) - cycles(1) + 1);
+cycleCol(cycles - cycles(1) + 1) = 1:numel(cycles);
+gaps = find(diff(cycles) > 1);
+runStart = cycles([1, gaps + 1]); runEnd = cycles([gaps, numel(cycles)]);
 files = M.hDataFiles;
 fileEnd = cumsum(double([files.numCycles]));
 fileStart = [0, fileEnd(1:end-1)] + 1;
 parts = {};
-for f = find(fileStart <= lastCycle & fileEnd >= firstCycle)
-    D = files(f);
-    c1 = max(firstCycle, fileStart(f)) - fileStart(f) + 1;
-    c2 = min(lastCycle, fileEnd(f)) - fileStart(f) + 1;
-    bytesPerCycle = double(D.header.bytesPerCycle);
-    fid = fopen(D.datFileName, 'r');
-    assert(fid > 0, 'slap2Frames:readFailed', 'Failed to open %s.', D.datFileName);
-    closeFile = onCleanup(@() fclose(fid));
-    fseek(fid, 2 * (double(D.lineHeaderIdxs(1)) - 1) + (c1 - 1) * bytesPerCycle, 'bof');
-    parts{end+1} = fread(fid, [bytesPerCycle / 2, c2 - c1 + 1], '*int16'); %#ok<AGROW>
-    assert(size(parts{end}, 2) == c2 - c1 + 1, 'slap2Frames:readFailed', 'Failed to read cycles of %s.', D.datFileName);
-    clear closeFile
+for r = 1:numel(runStart)
+    for f = find(fileStart <= runEnd(r) & fileEnd >= runStart(r))
+        D = files(f);
+        c1 = max(runStart(r), fileStart(f)) - fileStart(f) + 1;
+        c2 = min(runEnd(r), fileEnd(f)) - fileStart(f) + 1;
+        wordsPerCycle = double(D.header.bytesPerCycle) / 2;
+        fid = fopen(D.datFileName, 'r');
+        assert(fid > 0, 'slap2Frames:readFailed', 'Failed to open %s.', D.datFileName);
+        closeFile = onCleanup(@() fclose(fid));
+        fseek(fid, 2 * (double(D.lineHeaderIdxs(1)) - 1) + (c1 - 1) * 2 * wordsPerCycle, 'bof');
+        [parts{end+1}, count] = fread(fid, [wordsPerCycle, c2 - c1 + 1], '*int16'); %#ok<AGROW>
+        % fread pads a partly read last column with zeros, so check the count
+        assert(count == wordsPerCycle * (c2 - c1 + 1), 'slap2Frames:readFailed', ...
+            'Failed to read cycles %d-%d of %s: the file is shorter than its header says.', c1, c2, D.datFileName);
+        clear closeFile
+    end
 end
 block = [parts{:}];
 end

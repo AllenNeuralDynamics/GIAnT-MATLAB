@@ -152,6 +152,27 @@ classdef TestSlap2Frames < matlab.unittest.TestCase
             testCase.verifyEqual(Den, DenAll(loc, :, :), 'RelTol', 1e-12);
         end
 
+        function testRejectsChannelsBeyondRecording(testCase)
+            import matlab.unittest.fixtures.TemporaryFolderFixture
+            folder = testCase.applyFixture(TemporaryFolderFixture).Folder;
+            S2 = testCase.makeDiskData(folder, false);
+            testCase.verifyError(@() slap2Frames(S2, 3, 40, 4), 'slap2Frames:badChannel');
+        end
+
+        function testTruncatedFileErrors(testCase)
+            % fread pads a partly read last cycle with zeros; that must not pass
+            import matlab.unittest.fixtures.TemporaryFolderFixture
+            folder = testCase.applyFixture(TemporaryFolderFixture).Folder;
+            S2 = testCase.makeDiskData(folder, false);
+            fn = S2.hMultiDataFiles.hDataFiles(end).datFileName;
+            fid = fopen(fn, 'r'); w = fread(fid, inf, '*int16'); fclose(fid);
+            fid = fopen(fn, 'w'); fwrite(fid, w(1:end-7), 'int16'); fclose(fid);
+            testCase.verifyError(@() slap2Frames(S2, 1, testCase.totalLines - 2, 1), 'slap2Frames:readFailed');
+            % frames that only use cycles before the missing words still read
+            IM = slap2Frames(S2, 1, 40, 4);
+            testCase.verifyTrue(any(~isnan(IM(:))));
+        end
+
         function testFileReaderMatchesGetLineData(testCase)
             import matlab.unittest.fixtures.TemporaryFolderFixture
             folder = testCase.applyFixture(TemporaryFolderFixture).Folder;
