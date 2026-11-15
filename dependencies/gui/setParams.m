@@ -19,11 +19,12 @@ switch fnName
         params.tau_s = 0.024;            tooltips.tau_s = 'decay time constant of glutamate signal';
         params.tau2_s = 0.15;            tooltips.tau2_s = 'decay time constant of 2nd channel signal at synapses (usually spine calcium)';
         params.VIF = 1.67;                  tooltips.VIF = 'variance inflation factor for stdIM estimate';
-        params.peakMethod = {'''getActImPeaks''','''wmf'''}; tooltips.peakMethod = 'how sources are seeded: ''getActImPeaks'' (maxima of the trials'' combined activity image above peakth, fit with Gaussians) or ''wmf'' (whitened matched filter of the trials'' aligned activity images; two sources are kept apart only where resolved reproducibly across halves of the trials; see findSourcesWMF)';
+        params.peakMethod = {'''getActImPeaks''','''wmf'''}; tooltips.peakMethod = 'how sources are seeded: ''getActImPeaks'' (maxima of the trials'' combined activity image above peakth, fit with Gaussians) or ''wmf'' (whitened matched filter of the trials'' aligned activity images; two sources are kept apart only where resolved reproducibly across halves of the trials; needs at least 4 trials, with fewer getActImPeaks is used; see findSourcesWMF)';
         params.peakth = 8;              tooltips.peakth = 'peak identification threshold (actIM z-score)';
         params.minPeakDistance = 1;     tooltips.minPeakDistance = 'minimum Chebyshev distance between peaks (pixels); 1 = adjacent peaks allowed';
         params.wmfPeakth = 5;           tooltips.wmfPeakth = 'peakMethod ''wmf'': detection threshold (z-score of the whitened matched filter image)';
         params.wmfDip = 3;              tooltips.wmfDip = 'peakMethod ''wmf'': dip (z units) the filtered image must show between two nearby maxima to keep them as two sources (and dip/sqrt(2) in each half of the trials, when there are at least 4)';
+        params.wmfDeblendth = 8;        tooltips.wmfDeblendth = 'peakMethod ''wmf'': threshold (z units of the filtered image, at least wmfPeakth) for adding a seed where the residual of the seeds'' fit still peaks, and wmfDeblendth/sqrt(2) in each half of the trials; resolves sources too close to show a dip; Inf turns it off';
         params.nWorkers = 12;           tooltips.nWorkers = 'number of parallel workers';
         params.drawUserRois = true;     tooltips.drawUserRois = 'use user ROIs (annotations.h5, else post-acquisition annotations, else draw them)?';
         params.allowAnnotationGUI = true; tooltips.allowAnnotationGUI = 'open the ROI GUI for paths without usable annotations? Never opens in -batch/-nodisplay sessions; such paths are processed without user ROIs';

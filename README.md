@@ -475,20 +475,26 @@ String fields are stored as UTF-16 code units (`uint16`) for robust MATLAB/Pytho
 `params.peakMethod` sets how SILo seeds sources before extracting them.
 
 - **`'getActImPeaks'` (default)** takes the maxima of `act_im` (the mean of the valid trials' aligned activity images, minus a local median) above `params.peakth` (robust z). It fits them jointly with Gaussians, adds peaks where the residual still exceeds the threshold, and drops fitted peaks that are too small. Because the fit adds a peak wherever a blob is not Gaussian, it can split one elongated or large source into seeds at its edges, with none at its centre.
-- **`'wmf'`** (`findSourcesWMF`) works from the trials' aligned activity images (`per_trial_act_im`):
+- **`'wmf'`** (`findSourcesWMF`) works from the trials' aligned activity images (`per_trial_act_im`). It needs at least 4 trials; with fewer, SILo seeds with `'getActImPeaks'`.
   1. Each trial's image, minus its local median, is z-scored, and the trials' mean is z-scored again.
-  2. This combined image goes through a whitened matched filter: the detection statistic for a source of the empirical shape in noise of the empirical autocorrelation. The shape is the average of patches around strong, isolated maxima. The autocorrelation is measured away from activity, and carries the correlation of the noise along scan lines.
+  2. This combined image goes through a whitened matched filter: the detection statistic for a source of the empirical shape in noise of the empirical autocorrelation.
+     - The shape is the average of patches around strong, isolated maxima, so it keeps its own widths along rows and columns. With too few isolated maxima, it is a Gaussian with the row and column widths of the strongest maxima.
+     - The autocorrelation is measured away from activity, and carries the correlation of the noise along scan lines.
   3. Maxima above `params.wmfPeakth` are candidate seeds. A candidate within 6 px of a stronger one is merged into it unless the filtered image dips by `params.wmfDip` between them, both for all trials and for each half of the trials. So two sources are kept apart only where they are resolved reproducibly.
-  4. Each seed sits at the centroid of the combined image around its maximum, and must be active in at least 2 trials.
+  4. Deblending fits the combined image with one copy of the source shape per seed, each with its own amplitude and subpixel position. Where the filtered residual near a seed still peaks above `params.wmfDeblendth`, and above `params.wmfDeblendth`/√2 in each half of the trials, a seed is added and the fit repeated. This separates sources too close together to show a dip. A source much longer than the others can also get a second seed along it.
+  5. Each seed sits at its fitted position, and must be active in at least 2 trials.
 
-  With fewer than 4 trials (for example one long recording), the halves can't be tested: nearby maxima need only the dip in the combined image to stay apart, and a seed need only be active in one trial.
+  `params.wmfDeblendth` (default 8) is set apart from `params.wmfPeakth` (default 5):
+  - At 5, deblending added 53 and 66 seeds on the session below, against 17 and 11 at 8. On one path, half of the close pairs it left were brighter between the two seeds than at them in held-out trials, as they would be if one source were split in two (24% for `'getActImPeaks'`).
+  - Deblending at 8 doesn't depend on the detection threshold. In windows of 7 trials, with `params.wmfPeakth` at 3, 4 or 5, it added 8–13 seeds per window and left 2–3 close pairs, and the share of seeds that reproduced in the held-out trials didn't change.
 
 On a 39-trial SLAP2 session with two imaging paths:
 
-- **Fewer near-duplicate seeds.** `'wmf'` left 2 and 7 seeds with another seed closer than 3 px, against 59 and 43 for `'getActImPeaks'`.
-- **More reproducible seeds.** In cross-validation over halves of the trials (10 splits), more of the seeds found on one half were found again on the other: 131 vs 106 and 136 vs 85 per path.
-- **Better centred.** Seeds sat closer to the other half's activity peaks: 0.24–0.32 px vs 0.40–0.42 px.
-- **More seeds overall:** 177 and 175 vs 150 and 134, so the overall agreement between halves (Dice) is similar, 0.79–0.81 vs 0.77–0.82.
+- **Fewer near-duplicate seeds.** `'wmf'` left 16 and 10 seeds with another seed closer than 3 px, against 59 and 43 for `'getActImPeaks'`.
+- **More reproducible seeds.** In cross-validation over halves of the trials (10 splits), more of the seeds found on one half were found again on the other: 145 vs 106 and 148 vs 85 per path.
+- **Better centred.** Seeds sat closer to the other half's activity peaks: 0.26–0.34 px vs 0.40–0.42 px.
+- **More seeds overall:** 194 and 184 vs 150 and 134, so the overall agreement between halves (Dice) is similar, 0.80–0.82 vs 0.77–0.82.
+- **Few trials.** In windows of 7 trials, `'wmf'` found 164 and 173 seeds per window, against 99 and 84. Of these, 91% and 99% were present in the other 32 trials more often than 99% of background locations, against 98% and 100%.
 
 ## Citation
 

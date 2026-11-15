@@ -253,9 +253,12 @@ for DMDix = nDMDs:-1:1
         end
     end
 
-    if strcmp(params.peakMethod, 'wmf')
+    %'wmf' needs 4 imaged trials to test seeds in both halves of the trials;
+    %with fewer, seed from actIM as getActImPeaks does
+    actValid = reshape(actAligned(:,:,1,validTrials), sz(1), sz(2), []);
+    if strcmp(params.peakMethod, 'wmf') && nnz(squeeze(any(~isnan(actValid), [1 2]))) >= 4
         %seeds from the trials' aligned activity images rather than the combined actIM
-        [seedRC, seedInfo] = findSourcesWMF(reshape(actAligned(:,:,1,validTrials), sz(1), sz(2), []), params);
+        [seedRC, seedInfo] = findSourcesWMF(actValid, params);
         inSoma = somaMask(sub2ind(sz, round(seedRC(:,1)), round(seedRC(:,2))));
         thetaf = [seedInfo.value(~inSoma), seedRC(~inSoma,:)];
     else

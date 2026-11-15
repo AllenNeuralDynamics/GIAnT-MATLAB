@@ -3,7 +3,8 @@ classdef TestFindSourcesWMF < matlab.unittest.TestCase
     %   findSourcesWMF seeds sources from the trials' aligned activity images:
     %   a whitened matched filter of their combined robust z image, with
     %   nearby maxima merged unless they are resolved in both halves of the
-    %   trials, and seeds kept only if active in at least 2 trials. These
+    %   trials, seeds added where the residual of their fit still peaks in
+    %   both halves, and seeds kept only if active in at least 2 trials. These
     %   tests use synthetic activity images: noise correlated along rows (as
     %   along scan lines), Gaussian sources whose amplitude varies by trial,
     %   and NaN where pixels were not imaged.
@@ -49,19 +50,61 @@ classdef TestFindSourcesWMF < matlab.unittest.TestCase
 
         function testElongatedSourceGivesOneSeed(testCase)
             % a source 2.5x longer than wide, which a Gaussian fit can split
-            % into seeds at its ends, is one seed at its centre
-            src = TestFindSourcesWMF.grid();
-            act = TestFindSourcesWMF.simulate(src, ones(size(src, 1), 1), TestFindSourcesWMF.NTrials);
-            c = [48.3 48.6];
-            [C, R] = meshgrid(1:TestFindSourcesWMF.Sz(2), 1:TestFindSourcesWMF.Sz(1));
-            blob = exp(-((R - c(1)).^2/(2*1.1^2) + (C - c(2)).^2/(2*3^2)));
-            for t = 1:TestFindSourcesWMF.NTrials
-                act(:, :, t) = act(:, :, t) + 2*TestFindSourcesWMF.Amp*blob;
-            end
-            seeds = findSourcesWMF(act, TestFindSourcesWMF.params());
+            % into seeds at its ends, shows no dip in the filtered image, so
+            % before deblending it is one seed at its centre
+            [act, c] = TestFindSourcesWMF.withElongatedSource();
+            p = TestFindSourcesWMF.params(); p.wmfDeblendth = Inf;
+            seeds = findSourcesWMF(act, p);
             near = hypot(seeds(:, 1) - c(1), seeds(:, 2) - c(2)) < 6;
             testCase.verifyEqual(nnz(near), 1, 'one seed on the elongated source');
             testCase.verifyLessThan(hypot(seeds(near, 1) - c(1), seeds(near, 2) - c(2)), 1, 'at its centre');
+        end
+
+        function testDeblendingKeepsSeedsOnElongatedSource(testCase)
+            % deblending fits the source with copies of the shape of the
+            % others, and its residual reproduces in both halves, so a source
+            % this much longer than the others can get a second seed; seeds
+            % stay on it, one of them near its centre
+            [act, c] = TestFindSourcesWMF.withElongatedSource();
+            [seeds, info] = findSourcesWMF(act, TestFindSourcesWMF.params());
+            near = hypot(seeds(:, 1) - c(1), seeds(:, 2) - c(2)) < 6;
+            testCase.verifyLessThanOrEqual(nnz(near), 2, 'at most two seeds on the elongated source');
+            testCase.verifyLessThan(abs(seeds(near, 1) - c(1)), 1, 'on its axis');
+            testCase.verifyLessThan(abs(seeds(near, 2) - c(2)), 3, 'within one length scale of its centre');
+            testCase.verifyLessThan(min(hypot(seeds(near, 1) - c(1), seeds(near, 2) - c(2))), 1.5, 'one seed near its centre');
+            testCase.verifyEqual(nnz(info.added), nnz(near) - 1, 'the rest of the grid gets no added seeds');
+        end
+
+        function testDeblendingResolvesClosePair(testCase)
+            % two sources 2 px apart (less than twice their width, so their
+            % sum has no dip), each varying independently across trials: the
+            % dip test merges them and deblending separates them again
+            src = TestFindSourcesWMF.grid();
+            pair = [48.3 47.2; 48.3 49.2];
+            act = TestFindSourcesWMF.simulate([src; pair], [ones(size(src, 1), 1); 2; 2], TestFindSourcesWMF.NTrials);
+            ctr = mean(pair, 1);
+            p = TestFindSourcesWMF.params(); p.wmfDeblendth = Inf;
+            seeds = findSourcesWMF(act, p);
+            testCase.verifyEqual(nnz(hypot(seeds(:, 1) - ctr(1), seeds(:, 2) - ctr(2)) < 4), 1, 'one seed without deblending');
+            [seeds, info] = findSourcesWMF(act, TestFindSourcesWMF.params());
+            testCase.verifyEqual(nnz(hypot(seeds(:, 1) - ctr(1), seeds(:, 2) - ctr(2)) < 4), 2, 'two seeds with deblending');
+            testCase.verifyLessThan(max(TestFindSourcesWMF.nearest(pair, seeds)), 1, 'each source of the pair has a seed within 1 px');
+            testCase.verifyEqual(nnz(info.added), 1, 'only the pair gets an added seed');
+            testCase.verifyLessThan(max(TestFindSourcesWMF.nearest(src, seeds)), 1, 'the grid is still found');
+        end
+
+        function testFallbackKernelKeepsRowAndColumnWidths(testCase)
+            % sources in pairs 5 px apart are not isolated, so K is not
+            % estimated from patches; the Gaussian K it falls back to is
+            % wider along columns, as these sources are
+            [c, r] = meshgrid(14:20:74, 14:20:74);
+            src = [r(:) c(:)] + [0.3 -0.2];
+            src = [src; src + [0 5]];
+            act = TestFindSourcesWMF.simulate(src, 3*ones(size(src, 1), 1), TestFindSourcesWMF.NTrials, [0.8 1.4]);
+            [~, info] = findSourcesWMF(act, TestFindSourcesWMF.params());
+            [X, Y] = meshgrid(-4:4);
+            K = max(info.K, 0);
+            testCase.verifyGreaterThan(sum(K(:).*X(:).^2)/sum(K(:).*Y(:).^2), 1.5, 'K is wider along columns than along rows');
         end
 
         function testUnimagedPixels(testCase)
@@ -119,7 +162,7 @@ classdef TestFindSourcesWMF < matlab.unittest.TestCase
 
     methods (Static)
         function p = params()
-            p = struct('wmfPeakth', 5, 'wmfDip', 3, 'nanThresh', 0.33);
+            p = struct('wmfPeakth', 5, 'wmfDip', 3, 'wmfDeblendth', 8, 'nanThresh', 0.33);
         end
 
         function src = grid()
@@ -129,10 +172,11 @@ classdef TestFindSourcesWMF < matlab.unittest.TestCase
             src(hypot(src(:, 1) - 48, src(:, 2) - 48) < 1, :) = [];
         end
 
-        function act = simulate(src, amp, nTrials)
+        function act = simulate(src, amp, nTrials, sigma)
             % rows x cols x trials activity images: row-correlated noise of
-            % unit SD plus Gaussian sources (sigma 1.2 px) whose amplitude
-            % varies by trial
+            % unit SD plus Gaussian sources (sigma 1.2 px, or [rows cols])
+            % whose amplitude varies by trial
+            if nargin < 4, sigma = [1.2 1.2]; end
             sz = TestFindSourcesWMF.Sz;
             [C, R] = meshgrid(1:sz(2), 1:sz(1));
             k = [1 2 1]/sqrt(6); % unit-variance smoothing along rows
@@ -141,10 +185,21 @@ classdef TestFindSourcesWMF < matlab.unittest.TestCase
                 a = conv2(randn(sz + [0 2]), k, 'valid');
                 for s = 1:size(src, 1)
                     g = TestFindSourcesWMF.Amp*amp(s)*(0.5 + rand);
-                    a = a + g*exp(-((R - src(s, 1)).^2 + (C - src(s, 2)).^2)/(2*1.2^2));
+                    a = a + g*exp(-((R - src(s, 1)).^2/(2*sigma(1)^2) + (C - src(s, 2)).^2/(2*sigma(2)^2)));
                 end
                 act(:, :, t) = a;
             end
+        end
+
+        function [act, c] = withElongatedSource()
+            % the grid plus a source at c, 2.5x longer along columns than
+            % along rows and the same in every trial
+            src = TestFindSourcesWMF.grid();
+            act = TestFindSourcesWMF.simulate(src, ones(size(src, 1), 1), TestFindSourcesWMF.NTrials);
+            c = [48.3 48.6];
+            [C, R] = meshgrid(1:TestFindSourcesWMF.Sz(2), 1:TestFindSourcesWMF.Sz(1));
+            blob = exp(-((R - c(1)).^2/(2*1.1^2) + (C - c(2)).^2/(2*3^2)));
+            act = act + 2*TestFindSourcesWMF.Amp*blob;
         end
 
         function d = nearest(src, seeds)
