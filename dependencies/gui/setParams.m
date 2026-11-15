@@ -21,6 +21,8 @@ switch fnName
         params.VIF = 1.67;                  tooltips.VIF = 'variance inflation factor for stdIM estimate';
         params.peakth = 8;              tooltips.peakth = 'peak identification threshold (actIM z-score)';
         params.minPeakDistance = 1;     tooltips.minPeakDistance = 'minimum Chebyshev distance between peaks (pixels); 1 = adjacent peaks allowed';
+        params.interTrialAlignment = {'''rigid''','''affine''','''patchwise'''}; tooltips.interTrialAlignment = 'how trials are aligned to each other: ''rigid'' (one shift per trial), ''affine'' (one affine map per trial) or ''patchwise'' (a smooth displacement field set by patches of imaged pixels; corrects affine and local deformations between trial mean images)';
+        params.alignPatchPx = 1500;     tooltips.alignPatchPx = 'interTrialAlignment ''patchwise'': imaged pixels per patch (patches under half this are merged into neighbours); large enough that no single spine drives a patch, so the field cannot stretch or shrink individual spines';
         params.nWorkers = 12;           tooltips.nWorkers = 'number of parallel workers';
         params.drawUserRois = true;     tooltips.drawUserRois = 'use user ROIs (annotations.h5, else post-acquisition annotations, else draw them)?';
         params.allowAnnotationGUI = true; tooltips.allowAnnotationGUI = 'open the ROI GUI for paths without usable annotations? Never opens in -batch/-nodisplay sessions; such paths are processed without user ROIs';

@@ -1,4 +1,6 @@
-function E = processAllTrials_Async(dr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, motOutput, roiData, validTrials, params)
+function E = processAllTrials_Async(dr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, params)
+%warp: the across-trial alignment from SILo, mapping the common (across-trial
+%aligned) frame to each trial's registered image (see trialWarpCoords)
 %subproblems run on a pool of worker processes (see extractionPool)
 poolTimer = tic;
 extractionPool(params);
@@ -10,7 +12,7 @@ pending = []; %trial whose extraction is still running
 for i = 1:numel(validTrials)
     nLoad = validTrials(i);
     loadTimer = tic;
-    CD = loadTrial(dr, fns{nLoad},fls(nLoad),els(nLoad),selPix,discardFrames{nLoad}, alignData{nLoad}, meanAligned(:,:,:,nLoad), motOutput(:,nLoad), roiData, params);
+    CD = loadTrial(dr, fns{nLoad},fls(nLoad),els(nLoad),selPix,discardFrames{nLoad}, alignData{nLoad}, meanAligned(:,:,:,nLoad), warp, nLoad, roiData, params);
     E{nLoad}.ROIs = CD.ROIs; E{nLoad}.global = CD.global;
     E{nLoad}.discardFrames = CD.discardFrames;
     E{nLoad}.frameLines = CD.frameLines;
@@ -79,9 +81,20 @@ delete(resultsFuture.Predecessors);
 delete(resultsFuture);
 end
 
-function CD = loadTrial(dr, fn, startLine, endLine, selPix, discardFrames, alignData, meanIM, motOutput, roiData, params)
+function CD = loadTrial(dr, fn, startLine, endLine, selPix, discardFrames, alignData, meanIM, warp, trialIx, roiData, params)
 disp('Loading high-res data for file:')
 disp([dr filesep fn])
+
+%a shift between trials is added to the within-trial motion, as for every
+%frame; an affine or patchwise map instead gives each common-frame pixel its
+%own position in this trial's registered image (trialWarpCoords)
+A = warp.affine(:,:,trialIx);
+isShift = isempty(warp.nodes) && isequal(A(:,1:2), eye(2));
+if isShift
+    motOutput = A(:,3);
+else
+    motOutput = [0; 0];
+end
 
 numChannels = params.numChannels;
 orderedChannels = [params.activityChannel:numChannels, 1:params.activityChannel-1];
@@ -113,12 +126,19 @@ if params.isSLAP2
             motionC = repmat(alignData.motionDSc(1), size(frameLines)) + motOutput(2);
             motionR = repmat(alignData.motionDSr(1), size(frameLines)) + motOutput(1);
         end
-        CD.motionC = motionC;
-        CD.motionR = motionR;
-
         alignDataSlap2 = alignData.slap2;
         viewC = alignDataSlap2.viewC(1,:);
         viewR = alignDataSlap2.viewR(:,1);
+        if isShift
+            CD.motionC = motionC;
+            CD.motionR = motionR;
+        else %record the motion including the across-trial displacement at the image centre
+            assert(all(diff(viewC)==1) && all(diff(viewR)==1), 'loadTrial:view', 'expected unit-step viewC/viewR');
+            x0 = [(numel(viewR)+1)/2; (numel(viewC)+1)/2];
+            [rC, cC] = trialWarpCoords(warp, trialIx, x0(1), x0(2));
+            CD.motionC = motionC + cC - x0(2);
+            CD.motionR = motionR + rC - x0(1);
+        end
 
         selPx2D = selPx2D(1:size(alignDataSlap2.viewC,1), 1:size(alignDataSlap2.viewC,2));
         nPx = numel(selPx2D);
@@ -133,14 +153,21 @@ if params.isSLAP2
 
         %pixels to sample: sources, labeled pixels (global activity) and user
         %ROIs. Pixel (r,c) of the view is read at row viewR(r) + motionR and
-        %column viewC(c) + motionC of the trimmed datafile image.
+        %column viewC(c) + motionC of the trimmed datafile image; with an affine
+        %or patchwise map, at the view's (rT,cT) = trialWarpCoords(warp, trialIx, r, c)
+        %instead of (r,c).
         need = selPx2D | labeled;
         for rix = 1:length(roiData)
             need = need | reshape(logical(roiData{rix}.mask), size(need));
         end
         q = find(need);
         [rq, cq] = ind2sub(size(need), q);
-        rD = viewR(rq); cD = viewC(cq);
+        if isShift
+            rD = viewR(rq); cD = viewC(cq);
+        else
+            [rT, cT] = trialWarpCoords(warp, trialIx, rq, cq);
+            rD = viewR(1) - 1 + rT; cD = viewC(1) - 1 + cT;
+        end
         qpos = zeros(nPx, 1); qpos(q) = 1:numel(q); %rows of the sampled pixels q
 
         blocksize = 600; %number of frames to load at a time
@@ -212,9 +239,14 @@ if params.isSLAP2
         nFrames = size(IM,4);
         CD.frameLines = 1:nFrames;
 
-        %upsample motion
+        %position of every common-frame pixel in this trial's registered movie
         viewC = (1:size(IM,2)) + motOutput(2);
         viewR = (1:size(IM,1))' + motOutput(1);
+        if ~isShift
+            [cg, rg] = meshgrid(1:size(IM,2), 1:size(IM,1));
+            [rW, cW] = trialWarpCoords(warp, trialIx, rg(:), cg(:));
+            clear cg rg
+        end
 
         CD.motionC = alignData.motionC;
         CD.motionR = alignData.motionR;
@@ -244,8 +276,16 @@ if params.isSLAP2
             nanMask = isnan(Y(:,:,orderedChannels,:)); %Y2 below is in analysis channel order
             Y2 = nan(length(viewR),length(viewC),numChannels, nFramesInBlock);
             Finv = nan(length(viewR),length(viewC),nFramesInBlock);
-            parfor frIx = 1:nFramesInBlock
-                [Y2(:,:,:,frIx), Finv(:,:,frIx)] = interpFrames(Y(:,:,orderedChannels,frIx),viewC, viewR, Fresh);
+            if isShift
+                parfor frIx = 1:nFramesInBlock
+                    [Y2(:,:,:,frIx), Finv(:,:,frIx)] = interpFrames(Y(:,:,orderedChannels,frIx),viewC, viewR, Fresh);
+                end
+            else
+                parfor frIx = 1:nFramesInBlock
+                    [Yf, Ff] = interpFramesAt(Y(:,:,orderedChannels,frIx), rW, cW, Fresh);
+                    Y2(:,:,:,frIx) = reshape(Yf, size(Fresh,1), size(Fresh,2), []);
+                    Finv(:,:,frIx) = reshape(Ff, size(Fresh,1), size(Fresh,2));
+                end
             end
             Y2(nanMask) = nan;
 

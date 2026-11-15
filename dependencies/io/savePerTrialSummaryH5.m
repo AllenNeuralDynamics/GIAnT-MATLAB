@@ -112,6 +112,12 @@ if isfield(exptSummary, 'perTrialAlignmentOffsets') ...
         && numel(exptSummary.perTrialAlignmentOffsets) >= DMDix
     motOutput = exptSummary.perTrialAlignmentOffsets{DMDix};
 end
+warp = []; % common frame -> trial image (see trialWarpCoords), when not a shift
+if isfield(exptSummary, 'perTrialAlignmentWarp') ...
+        && numel(exptSummary.perTrialAlignmentWarp) >= DMDix ...
+        && ~isempty(exptSummary.perTrialAlignmentWarp{DMDix})
+    warp = exptSummary.perTrialAlignmentWarp{DMDix};
+end
 
 perTrialActImPeaks = nan(nTrials, maxPeaks, 3);
 for tIx = 1:nTrials
@@ -121,7 +127,11 @@ for tIx = 1:nTrials
     end
     pRows = double(peaksCell{tIx}.row(:));
     pCols = double(peaksCell{tIx}.col(:));
-    if ~isempty(motOutput) && size(motOutput, 2) >= tIx
+    %peaks are found in the trial's own registered image; map them into the common frame
+    if ~isempty(warp) && size(warp.affine, 3) >= tIx && all(~isnan(warp.affine(:, :, tIx)), 'all') ...
+            && (~isempty(warp.nodes) || ~isequal(warp.affine(:, 1:2, tIx), eye(2)))
+        [pRows, pCols] = trialWarpInverse(warp, tIx, pRows, pCols);
+    elseif ~isempty(motOutput) && size(motOutput, 2) >= tIx
         pRows = pRows - motOutput(1, tIx);
         pCols = pCols - motOutput(2, tIx);
     end

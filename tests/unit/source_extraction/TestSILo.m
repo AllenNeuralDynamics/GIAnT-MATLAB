@@ -77,6 +77,10 @@ classdef TestSILo < matlab.unittest.TestCase
         end
     end
 
+    properties (TestParameter)
+        refinedAlignment = {'affine', 'patchwise'}
+    end
+
     methods (Test)
         function testAlignsTrialsToCommonFrame(testCase)
             testCase.writeDataset(1);
@@ -88,6 +92,65 @@ classdef TestSILo < matlab.unittest.TestCase
             % aligned(r,c) = trial(r+m), so shift + motion is the same for all trials
             offsets = args.motOutput + testCase.Shifts';
             testCase.verifyEqual(offsets - offsets(:,1), zeros(2, testCase.NumTrials), 'AbsTol', 0.25);
+        end
+
+        function testRefinedAlignmentKeepsShiftsAndFindsBlobs(testCase, refinedAlignment)
+            % the trials differ only by shifts: an affine or patchwise refinement
+            % recovers them, with no stretch, and the blobs are still found
+            testCase.writeDataset(1);
+
+            testCase.runSILo(testCase.Dr, struct('interTrialAlignment', refinedAlignment, 'alignPatchPx', 300));
+
+            args = testCase.loadExtractorArgs();
+            warp = args.warp;
+            testCase.verifyEqual(isempty(warp.nodes), strcmp(refinedAlignment, 'affine'));
+            [cc, rr] = meshgrid(1:5:testCase.CropSize, 1:5:testCase.CropSize);
+            d = zeros(numel(rr), 2, testCase.NumTrials);
+            for t = 1:testCase.NumTrials
+                [rT, cT] = trialWarpCoords(warp, t, rr(:), cc(:));
+                d(:,:,t) = [rT - rr(:), cT - cc(:)] + testCase.Shifts(t,:);
+            end
+            testCase.verifyEqual(d - d(:,:,1), zeros(size(d)), 'AbsTol', 0.25, ...
+                'every pixel: shift + displacement is the same for all trials');
+            expected = testCase.expectedSourcePositions(args.motOutput);
+            src = [args.sources.R(:) args.sources.C(:)];
+            dist = sqrt((src(:,1) - expected(:,1)').^2 + (src(:,2) - expected(:,2)').^2);
+            testCase.verifyLessThanOrEqual(min(dist, [], 1), 1.5*ones(1, size(expected, 1)), 'every blob should have a source');
+
+            % each trial's peaks, found in its own image, land on the blobs in the common frame
+            pt = loadStructFromH5(fullfile(testCase.SaveDr, 'source_extraction', 'per_trial_summary.h5'));
+            pk = double(pt.Path1.visualizations.per_trial_act_im_peaks); % trials x peaks x 3, 0-indexed
+            blobs = testCase.Blobs - testCase.Margin - (testCase.Shifts(1,:) + args.motOutput(:,1)');
+            for t = 1:testCase.NumTrials
+                testCase.verifyEqual(squeeze(pk(t,:,2:3)) + 1, blobs, 'AbsTol', 0.25, sprintf('trial %d peaks in the common frame', t));
+            end
+
+            fi = h5info(fullfile(testCase.SaveDr, 'source_extraction', 'experiment_summary.h5'), '/Path1/frame_info');
+            names = {fi.Datasets.Name};
+            testCase.verifyTrue(ismember('trial_alignment_affine', names));
+            testCase.verifyEqual(ismember('trial_alignment_displacement', names), strcmp(refinedAlignment, 'patchwise'));
+        end
+
+        function testRigidAlignmentSavesShiftsAsAffineMaps(testCase)
+            testCase.writeDataset(1);
+
+            testCase.runSILo(testCase.Dr);
+
+            args = testCase.loadExtractorArgs();
+            testCase.verifyEmpty(args.warp.nodes);
+            testCase.verifyEqual(args.warp.affine(:,1:2,:), repmat(eye(2), 1, 1, testCase.NumTrials));
+            es = loadStructFromH5(fullfile(testCase.SaveDr, 'source_extraction', 'experiment_summary.h5'));
+            testCase.verifyFalse(isfield(es.Path1.frame_info, 'trial_alignment_displacement'));
+            A = double(es.Path1.frame_info.trial_alignment_affine); % trials x 2 x 3, 0-indexed
+            testCase.verifyEqual(size(A), [testCase.NumTrials 2 3]);
+            testCase.verifyEqual(squeeze(A(:,:,3))', args.motOutput, 'AbsTol', 1e-12);
+        end
+
+        function testRejectsUnknownInterTrialAlignment(testCase)
+            testCase.writeDataset(1);
+
+            testCase.verifyError(@() testCase.runSILo(testCase.Dr, struct('interTrialAlignment', 'elastic')), ...
+                'SILo:interTrialAlignment');
         end
 
         function testFindsSourcesAtActivityBlobs(testCase)

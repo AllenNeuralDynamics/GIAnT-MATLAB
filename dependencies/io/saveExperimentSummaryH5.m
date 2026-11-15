@@ -6,7 +6,8 @@ function saveExperimentSummaryH5(filename, exptSummary, trialTable)
 %   documented in the README.md "Experiment Summary" section:
 %       /params
 %       /Path{n}/Z_depths
-%       /Path{n}/frame_info/{offline,online}{X,Y,Z}shifts,
+%       /Path{n}/frame_info/{offline,online}{X,Y,Z}shifts, trial_alignment_affine,
+%                          trial_alignment_displacement (patchwise only),
 %                          trial_num_frames, frame_line_idxs, discard_frames
 %       /Path{n}/visualizations/{mean_im, act_im, act_im_peaks}
 %       /Path{n}/global/F
@@ -202,6 +203,37 @@ if isSlap2
     fi.onlineXshifts = onlineX;
     fi.onlineYshifts = onlineY;
     fi.onlineZshifts = onlineZ;
+end
+
+% per-trial map from the common frame to each trial's registered image,
+% [row; col] = A(:,1:2)*[row; col] + A(:,3), converted to 0-indexed pixels;
+% for patchwise alignment, the plane part of the field
+if isfield(exptSummary, 'perTrialAlignmentWarp') && numel(exptSummary.perTrialAlignmentWarp) >= DMDix ...
+        && ~isempty(exptSummary.perTrialAlignmentWarp{DMDix})
+    warp = exptSummary.perTrialAlignmentWarp{DMDix};
+    A0 = nan(2, 3, nTrials);
+    for tIx = 1:min(nTrials, size(warp.affine, 3))
+        A = warp.affine(:, :, tIx);
+        A0(:, :, tIx) = [A(:, 1:2), A(:, 3) + A(:, 1:2)*[1; 1] - [1; 1]];
+    end
+    fi.trial_alignment_affine = permute(A0, [3 1 2]); % trials x 2 x 3
+
+    % patchwise: the full map as a displacement field. Common-frame pixel
+    % [row; col] is read from the trial's registered image at [row; col] +
+    % displacement (the same in 0- and 1-indexed pixels)
+    if ~isempty(warp.nodes) && ~isempty(exptSummary.meanIM{DMDix})
+        H = size(exptSummary.meanIM{DMDix}, 1); W = size(exptSummary.meanIM{DMDix}, 2);
+        [cc, rr] = meshgrid(1:W, 1:H);
+        U = nan(nTrials, 2, H, W, 'single');
+        for tIx = 1:min(nTrials, size(warp.affine, 3))
+            if all(~isnan(warp.affine(:, :, tIx)), 'all')
+                [rT, cT] = trialWarpCoords(warp, tIx, rr, cc);
+                U(tIx, 1, :, :) = reshape(single(rT - rr), 1, 1, H, W);
+                U(tIx, 2, :, :) = reshape(single(cT - cc), 1, 1, H, W);
+            end
+        end
+        fi.trial_alignment_displacement = U; % trials x 2 x rows x cols
+    end
 end
 end
 
