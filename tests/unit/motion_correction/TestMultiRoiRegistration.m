@@ -99,6 +99,82 @@ classdef TestMultiRoiRegistration < matlab.unittest.TestCase
             testCase.verifyEqual(double(aData.slap2.cropCol), testCase.RoiRows(1) - testCase.MaxShift);
         end
 
+        function testCompensationNeedsLineData(testCase)
+            % without line headers (this fake reader), compensateOnline warns and
+            % registers as before, and the alignment file records that
+            name = 'acq_DMD1-TRIAL000001.dat';
+            testCase.writeAcquisition(name);
+            testCase.writeTrialTable({name});
+
+            tt = testCase.verifyWarning(@() testCase.runRegistration('compensateOnline', true), ...
+                'MultiRoiRegistration:noCompensation');
+
+            aData = testCase.loadAlignmentData(tt);
+            testCase.verifyEqual(double(aData.slap2.onlineCompensation.enabled), 0);
+            testCase.verifyEqual(aData.motionDSr, zeros(1, numel(aData.motionDSr)), 'AbsTol', 0.25);
+        end
+
+        function testCompensationRecoversTissueMotion(testCase)
+            % a line-level recording with known tissue motion and a simulated
+            % online correction (frequent offset changes inside frames). With
+            % compensateOnline, the residual motion plus each frame's offset
+            % follows the tissue motion; without it, frames that span an offset
+            % change are blurred and the motion is off near switches.
+            name = 'acq_DMD1-TRIAL000001.dat';
+            testCase.writeAcquisition(name, 'lineLevel', true);
+            testCase.writeTrialTable({name});
+            truth = slap2.Slap2DataFile(fullfile(testCase.DataDir, name)).truthMotion;
+
+            ttU = testCase.runRegistration();
+            aU = testCase.loadAlignmentData(ttU);
+            ttK = testCase.runRegistration('compensateOnline', true, 'overwriteExisting', true);
+            aK = testCase.loadAlignmentData(ttK);
+
+            oc = aK.slap2.onlineCompensation;
+            testCase.verifyEqual(double(oc.enabled), 1);
+            DS = double(aK.DSframes(:))';
+            dt = ceil((1/testCase.LinePeriod_s)/testCase.AlignHz);
+            mTrue = TestMultiRoiRegistration.frameMeans(truth, DS, dt, 20);
+            ref = double(oc.refOffset(:))';
+            % compensated: motionDS + [frameRefY; frameRefX] - [refY; refX]
+            totK = [double(aK.motionDSr(:))'; double(aK.motionDSc(:))'] + ...
+                [double(oc.frameRefY(:))' - ref(2); double(oc.frameRefX(:))' - ref(1)];
+            errK = totK - mTrue; errK = errK - mean(errK, 2);
+            % uncompensated: motionDS + the header offset at each frame's centre
+            off = getLineOnlineOffsets(slap2.Slap2DataFile(fullfile(testCase.DataDir, name)));
+            totU = [double(aU.motionDSr(:))'; double(aU.motionDSc(:))'] + ...
+                [double(off.y(DS))' - ref(2); double(off.x(DS))' - ref(1)];
+            errU = totU - mTrue; errU = errU - mean(errU, 2);
+            rmsK = sqrt(mean(errK.^2, 2)); rmsU = sqrt(mean(errU.^2, 2));
+            testCase.log(1, sprintf('motion error RMS (rows, cols): compensated %.3f %.3f px, uncompensated %.3f %.3f px', rmsK, rmsU));
+            testCase.verifyLessThan(rmsK, 0.15);
+            testCase.verifyLessThan(rmsK, 0.6 * rmsU);
+            % the residual stays as small as without compensation
+            testCase.verifyLessThan(max(abs([aK.motionDSr(:); aK.motionDSc(:)])), 1.5);
+            % the output grid is the uncompensated one (the raster's extent)
+            testCase.verifyEqual(double(aK.slap2.trimRows(:)'), double(aU.slap2.trimRows(:)'));
+            testCase.verifyEqual(double(aK.slap2.trimCols(:)'), double(aU.slap2.trimCols(:)'));
+            % each frame's reference offset is its kernel-weighted offset
+            testCase.verifyEqual(double([oc.frameRefX(:) oc.frameRefY(:)]), frameOnlineOffsets(off, DS, dt));
+        end
+
+        function testCompensationWithoutSwitchesChangesNothing(testCase)
+            % with a constant online offset, compensated frames are the
+            % uncompensated ones, so registration gives the same results
+            name = 'acq_DMD1-TRIAL000001.dat';
+            testCase.writeAcquisition(name, 'lineLevel', true, 'updateEvery', 1e9);
+            testCase.writeTrialTable({name});
+
+            aU = testCase.loadAlignmentData(testCase.runRegistration());
+            aK = testCase.loadAlignmentData(testCase.runRegistration('compensateOnline', true, 'overwriteExisting', true));
+
+            testCase.verifyEqual(double(aK.slap2.onlineCompensation.enabled), 1);
+            testCase.verifyEqual(aK.motionDSr, aU.motionDSr);
+            testCase.verifyEqual(aK.motionDSc, aU.motionDSc);
+            testCase.verifyEqual(aK.meanIM, aU.meanIM);
+            testCase.verifyEqual(double(aK.slap2.trimRows), double(aU.slap2.trimRows));
+        end
+
         function testRecNegErrForShortRecording(testCase)
             % A recording shorter than one 10 s chunk still gets a
             % reconstruction error for every frame (it used to get none).
@@ -268,6 +344,19 @@ classdef TestMultiRoiRegistration < matlab.unittest.TestCase
 
             testCase.verifyError(@() testCase.runRegistration('maxshift', 2.5), ...
                 ?MException);
+        end
+    end
+
+    methods (Static, Access = private)
+        function mF = frameMeans(m, DS, dt, P)
+            % a per-line quantity (lines x 2, [rows cols]) averaged over each
+            % frame with getImage's kernel: 2 x frames
+            n = size(m, 1); dtRead = max(3 * dt, P); mF = zeros(2, numel(DS));
+            for f = 1:numel(DS)
+                lns = max(1, DS(f) - dtRead):min(n, DS(f) + dtRead);
+                w = exp(-abs(DS(f) - lns(:)) / dt);
+                mF(:, f) = (w' * m(lns, :))' / sum(w);
+            end
         end
     end
 
