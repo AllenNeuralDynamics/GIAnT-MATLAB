@@ -484,7 +484,19 @@ metaFilename = [datFilename(1:ix+3) '.meta'];
 meta = load(metaFilename, '-mat');
 end
 
-function [IM, freshness] = getImageWrapper(S2data, channel, frames, dt, zPlane, spTypeFlag)
+function [IM, freshness] = getImageWrapper(S2data, channel, frames, dt, zPlane, spTypeFlag, offsets)
+%getImage's frame: raster superpixels only (spTypeFlag 1) or all (0). Raster
+%frames of SLAP2 recordings come from slap2Frames, which forms the same image
+%several times faster than getImage. offsets (getLineOnlineOffsets output),
+%when given, form the frame with the online motion correction undone.
+if nargin < 7, offsets = []; end
+if spTypeFlag == 1 && isprop(S2data, 'hMultiDataFiles')
+    [IM, freshness] = slap2Frames(S2data, channel, frames, dt, ZIdx = zPlane, ...
+        CompensateOnline = ~isempty(offsets), Offsets = offsets);
+    return
+end
+assert(isempty(offsets), 'MultiRoiRegistration:compensationNeedsRaster', ...
+    'Undoing the online motion correction needs raster-only frames of a SLAP2 recording.');
 if spTypeFlag
     [IM,~,freshness] = S2data.getImage(channel, frames, dt, zPlane, spTypeFlag);
 else
