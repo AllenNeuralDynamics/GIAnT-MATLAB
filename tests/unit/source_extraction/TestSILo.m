@@ -176,6 +176,51 @@ classdef TestSILo < matlab.unittest.TestCase
             end
         end
 
+        function testWmfSeedsFindSourcesAtActivityBlobs(testCase)
+            % peakMethod 'wmf' seeds from the trials' aligned activity images
+            % (it needs at least 4 trials)
+            testCase.NumTrials = 5;
+            testCase.Shifts = [0 0; 2 -1; -1 3; 1 1; -2 0];
+            testCase.writeDataset(1);
+
+            params = testCase.runSILo(testCase.Dr, struct('peakMethod', 'WMF'));
+
+            testCase.verifyEqual(params.peakMethod, 'wmf');
+            args = testCase.loadExtractorArgs();
+            src = [args.sources.R(:) args.sources.C(:)];
+            testCase.assertNotEmpty(src);
+            expected = testCase.expectedSourcePositions(args.motOutput);
+            dist = sqrt((src(:,1) - expected(:,1)').^2 + (src(:,2) - expected(:,2)').^2);
+            testCase.verifyLessThanOrEqual(min(dist, [], 1), 1.5*ones(1, size(expected, 1)), ...
+                'every blob should have a source');
+            testCase.verifyEqual(size(src, 1), size(expected, 1), 'one source per blob');
+            % seed values are the filtered image's z-scores, not getActImPeaks' amplitudes
+            testCase.runSILo(testCase.Dr);
+            argsDefault = testCase.loadExtractorArgs();
+            testCase.verifyNotEqual(sort(args.sources.V(:)), sort(argsDefault.sources.V(:)), 'seeded by findSourcesWMF');
+        end
+
+        function testWmfFallsBackBelowFourTrials(testCase)
+            % with 3 trials, peakMethod 'wmf' seeds as getActImPeaks does
+            testCase.writeDataset(1);
+            testCase.runSILo(testCase.Dr);
+            args = testCase.loadExtractorArgs();
+            expected = [args.sources.R(:) args.sources.C(:)];
+            testCase.assertNotEmpty(expected);
+
+            testCase.runSILo(testCase.Dr, struct('peakMethod', 'wmf'));
+
+            args = testCase.loadExtractorArgs();
+            testCase.verifyEqual([args.sources.R(:) args.sources.C(:)], expected);
+        end
+
+        function testRejectsUnknownPeakMethod(testCase)
+            testCase.writeDataset(1);
+
+            testCase.verifyError(@() testCase.runSILo(testCase.Dr, struct('peakMethod', 'gaussfit')), ...
+                'SILo:peakMethod');
+        end
+
         function testWritesSummariesAndTrialTable(testCase)
             testCase.writeDataset(1);
 

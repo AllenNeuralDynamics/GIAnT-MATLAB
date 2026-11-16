@@ -14,6 +14,10 @@ params.interTrialAlignment = lower(char(params.interTrialAlignment));
 if ~any(strcmp(params.interTrialAlignment, {'rigid', 'affine', 'patchwise'}))
     error('SILo:interTrialAlignment', 'params.interTrialAlignment must be ''rigid'', ''affine'' or ''patchwise'', not ''%s''.', params.interTrialAlignment);
 end
+params.peakMethod = lower(char(params.peakMethod));
+if ~any(strcmp(params.peakMethod, {'getactimpeaks', 'wmf'}))
+    error('SILo:peakMethod', 'params.peakMethod must be ''getActImPeaks'' or ''wmf'', not ''%s''.', params.peakMethod);
+end
 if ~nargin
     if ~isInteractiveSession()
         error('SILo:NonInteractive', 'No interactive display: pass the trial_table.h5 path (or its folder) to SILo.');
@@ -312,7 +316,17 @@ for DMDix = nDMDs:-1:1
         end
     end
 
-    thetaf = getActImPeaks(actIM,params.peakth,somaMask,params.minPeakDistance);
+    %'wmf' needs 4 imaged trials to test seeds in both halves of the trials;
+    %with fewer, seed from actIM as getActImPeaks does
+    actValid = reshape(actAligned(:,:,1,validTrials), sz(1), sz(2), []);
+    if strcmp(params.peakMethod, 'wmf') && nnz(squeeze(any(~isnan(actValid), [1 2]))) >= 4
+        %seeds from the trials' aligned activity images rather than the combined actIM
+        [seedRC, seedInfo] = findSourcesWMF(actValid, params);
+        inSoma = somaMask(sub2ind(sz, round(seedRC(:,1)), round(seedRC(:,2))));
+        thetaf = [seedInfo.value(~inSoma), seedRC(~inSoma,:)];
+    else
+        thetaf = getActImPeaks(actIM,params.peakth,somaMask,params.minPeakDistance);
+    end
 
     sources = struct('R', [], 'C', [], 'V', []);
     totalPix = sum(~isnan(actIM(:)) & ~somaMask(:));
