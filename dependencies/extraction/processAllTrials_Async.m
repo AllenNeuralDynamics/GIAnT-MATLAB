@@ -105,18 +105,27 @@ if params.isSLAP2
         CD.frameLines = frameLines;
         selPx2D = any(selPix,3);
 
-        %upsample motion
+        alignDataSlap2 = alignData.slap2;
+
+        %upsample motion. If registration undid the online motion correction,
+        %each DS frame's motion is relative to the DMD coordinates of its own
+        %offset; adding that offset (mapped to rows/cols, relative to the
+        %reference) gives the continuous tissue motion, which is what can be
+        %interpolated. Frames are then formed compensated, per block, around the
+        %block's typical offset (see onlineCompensation).
+        lineRange = [min(startLine, alignData.DSframes(1)), max(endLine, alignData.DSframes(end))];
+        kernelLines = max(ceil(linerateHz / double(alignData.alignHz)), ceil(dt)); %the wider of the registration and extraction kernels
+        [comp, motionDSr, motionDSc] = onlineCompensation(alignDataSlap2, alignData, S2data, lineRange, kernelLines);
         if numel(alignData.DSframes) > 1
-            motionC = interp1(alignData.DSframes, alignData.motionDSc, frameLines, 'pchip', 'extrap') + motOutput(2);
-            motionR = interp1(alignData.DSframes, alignData.motionDSr, frameLines, 'pchip', 'extrap') + motOutput(1);
+            motionC = interp1(alignData.DSframes, motionDSc, frameLines, 'pchip', 'extrap') + motOutput(2);
+            motionR = interp1(alignData.DSframes, motionDSr, frameLines, 'pchip', 'extrap') + motOutput(1);
         else %only one downsampled frame; assume constant motion
-            motionC = repmat(alignData.motionDSc(1), size(frameLines)) + motOutput(2);
-            motionR = repmat(alignData.motionDSr(1), size(frameLines)) + motOutput(1);
+            motionC = repmat(motionDSc(1), size(frameLines)) + motOutput(2);
+            motionR = repmat(motionDSr(1), size(frameLines)) + motOutput(1);
         end
-        CD.motionC = motionC;
+        CD.motionC = motionC; %with compensation: relative to the frame of comp.RefOffset
         CD.motionR = motionR;
 
-        alignDataSlap2 = alignData.slap2;
         viewC = alignDataSlap2.viewC(1,:);
         viewR = alignDataSlap2.viewR(:,1);
 
@@ -156,8 +165,9 @@ if params.isSLAP2
             %as getImages(orderedChannels, frameLines(fIxs), ceil(dt), 1, 1), trimmed
             %and interpolated with interpFrames, at the sampled pixels only, but with
             %the channels in analysis order (getImages returns them in file order)
+            [compB, dB] = blockCompensation(comp, frameLines(fIxs));
             [Yq, Fq] = slap2FramesAt(S2data, orderedChannels, frameLines(fIxs), ceil(dt), ...
-                alignDataSlap2.trimRows, alignDataSlap2.trimCols, rD, cD, motionR(fIxs), motionC(fIxs));
+                alignDataSlap2.trimRows, alignDataSlap2.trimCols, rD, cD, motionR(fIxs) - dB(1), motionC(fIxs) - dB(2), compB);
 
             IMsel(:, :, fIxs) = Yq(qpos(selPx2D(:)),:,:);
             Finvsel(:,fIxs) = Fq(qpos(selPx2D(:)),:);
@@ -326,6 +336,15 @@ function [Yq, Fq] = slap2FramesAt(S2, ch, times, dt, trimRows, trimCols, rD, cD,
 if nargin < 11, comp = []; end
 hdr = S2.hMultiDataFiles.header;
 NR = double(hdr.dmdPixelsPerRow); NC = double(hdr.dmdPixelsPerColumn);
+%with compensation, the frames are formed around comp.RefOffset, which moves
+%the samples of lines on other offsets by up to pad pixels, possibly past the
+%trimmed raster: read that much further around it, in the same coordinates
+pad = compensationPad(comp, S2, times, dt);
+if pad > 0
+    r1 = max(1, trimRows(1) - pad); c1 = max(1, trimCols(1) - pad);
+    rD = rD + (trimRows(1) - r1); cD = cD + (trimCols(1) - c1);
+    trimRows = r1:min(NC, trimRows(end) + pad); trimCols = c1:min(NR, trimCols(end) + pad);
+end
 nF = numel(times); nCh = numel(ch); nq = numel(rD); n1 = numel(trimRows); n2 = numel(trimCols);
 %pixels within the block's motion range of each point
 mark = false(n1, n2);
@@ -371,6 +390,50 @@ Yq = permute(num ./ den, [1 3 2]);
 Fq = 1 ./ den; Fq(isinf(Fq)) = nan;
 end
 
+function pad = compensationPad(comp, S2, times, dt)
+%the largest shift, in pixels, that forming these frames around comp.RefOffset
+%applies to the samples of the lines they use (0 without compensation)
+pad = 0;
+if isempty(comp), return, end
+dtRead = max(3 * dt, double(S2.hMultiDataFiles.header.linesPerCycle));
+off = comp.Offsets;
+lns = max(1, min(times) - dtRead):min(numel(off.x), max(times) + dtRead);
+d = comp.Mapping * ([double(off.x(lns))'; double(off.yEff(lns))'] - comp.RefOffset(:));
+pad = max(abs(d(:)));
+end
+
+function [comp, motionDSr, motionDSc] = onlineCompensation(alignDataSlap2, alignData, S2, lineRange, kernelLines)
+%the online-compensation settings registration used (empty without), and the
+%DS motion to interpolate: as saved, or with compensation the continuous
+%motion relative to the frame of the reference offset. Only the line headers
+%of lineRange, plus the frames' kernel (kernelLines: the wider of the
+%registration and extraction frames' dt, in lines), are read.
+motionDSr = double(alignData.motionDSr); motionDSc = double(alignData.motionDSc);
+comp = [];
+if ~isfield(alignDataSlap2, 'onlineCompensation'), return, end
+oc = alignDataSlap2.onlineCompensation;
+if ~isfield(oc, 'enabled') || ~logical(oc.enabled), return, end
+margin = 2 * max(3 * kernelLines, double(S2.hMultiDataFiles.header.linesPerCycle)) + 8;
+off = getLineOnlineOffsets(S2, YLead = double(oc.yLead(:))', Lines = double(lineRange) + [-margin margin]);
+map = double(oc.mapping); ref = double(oc.refOffset(:))';
+d = map * ([double(oc.frameRefX(:))'; double(oc.frameRefY(:))'] - ref');   %[row; col] per DS frame
+motionDSr = reshape(motionDSr, 1, []) + d(1, :);
+motionDSc = reshape(motionDSc, 1, []) + d(2, :);
+comp = struct('Offsets', off, 'RefOffset', ref, 'Mapping', map);
+end
+
+function [compB, dB] = blockCompensation(comp, lines)
+%frames of a block are formed compensated around the block's median offset,
+%so that the motion to apply, motion - dB, stays as small as without
+%compensation; empty and [0 0] without compensation
+compB = []; dB = [0 0];
+if isempty(comp), return, end
+x = double(comp.Offsets.x(lines)); y = double(comp.Offsets.yEff(lines));
+oB = round([median(x) median(y)]);
+dB = (comp.Mapping * (oB - comp.RefOffset)')';
+compB = struct('Offsets', comp.Offsets, 'RefOffset', oB, 'Mapping', comp.Mapping);
+end
+
 function [V, W] = rawFramesAt(S2, ch, times, dt, id, comp)
 %getImages' frames at raster superpixels id only: V is numel(id) x frames x
 %channels (in the order of ch), W (getImages' dataCount) numel(id) x frames.
@@ -383,6 +446,7 @@ if nargin < 6, comp = []; end
 args = {};
 if ~isempty(comp)
     args = {'CompensateOnline', true, 'Offsets', comp.Offsets, 'RefOffset', comp.RefOffset};
+    if isfield(comp, 'Mapping'), args = [args {'Mapping', comp.Mapping}]; end
 end
 [Num, Den, pix] = slap2FrameSums(S2, ch, times, dt, 'Boundary', 'exclusive', 'MaskInvalid', false, ...
     'Pixels', id, args{:});

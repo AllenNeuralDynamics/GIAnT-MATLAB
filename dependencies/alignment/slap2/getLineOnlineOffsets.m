@@ -26,6 +26,15 @@ function off = getLineOnlineOffsets(S2, opts)
 %   not before the previous x/y switch line.
 %
 %   off = getLineOnlineOffsets(S2, YLead=[a b]) sets these lead times.
+%
+%   off = getLineOnlineOffsets(S2, Lines=[first last]) reads only the cycles
+%   covering lines first-max(YLead)-1 to last+max(YLead)+1, so that a trial of
+%   a long continuous recording doesn't read the headers of the whole
+%   recording. The output has the same fields and length (all lines of the
+%   recording, so that it is indexed by line as before), and is exact on
+%   lines first to last; lines outside the cycles read repeat the first or
+%   last value read. medianXY is then the median over the lines read, and
+%   off.linesRead gives their first and last line.
 %   z steps on every update but is ignored by slap2Frames (the z actuator is
 %   slow and the steps are small).
 %
@@ -36,6 +45,7 @@ function off = getLineOnlineOffsets(S2, opts)
 arguments
     S2
     opts.YLead (1,2) double {mustBeNonnegative, mustBeInteger} = [2 6]
+    opts.Lines (1,2) double = [1 Inf]
 end
 
 if isprop(S2, 'hMultiDataFiles') || isfield(S2, 'hMultiDataFiles')
@@ -48,13 +58,26 @@ else
     files = S2;
 end
 
-parts = cell(numel(files), 5);
 P = numel(files(1).lineHeaderIdxs);
+nCycles = arrayfun(@(D) double(D.numCycles), files(:)');
+cyclesBefore = [0 cumsum(nCycles(1:end-1))];
+numLines = sum(nCycles) * P;
+% the cycles to read: those covering the requested lines, widened by the y lead
+pad = max(opts.YLead) + 1;
+firstCycle = max(1, floor((opts.Lines(1) - pad - 1) / P) + 1);
+lastCycle = min(sum(nCycles), ceil((opts.Lines(2) + pad) / P));
+assert(firstCycle <= lastCycle, 'getLineOnlineOffsets:lines', ...
+    'Lines [%g %g] are outside the recording (%d lines).', opts.Lines(1), opts.Lines(2), numLines);
+
+parts = cell(numel(files), 5);
 for k = 1:numel(files)
     D = files(k);
     assert(numel(D.lineHeaderIdxs) == P, 'getLineOnlineOffsets:linesPerCycle', ...
         'All files must have the same number of lines per cycle.');
-    [parts{k, :}] = readFile(D);
+    cycles = max(1, firstCycle - cyclesBefore(k)):min(nCycles(k), lastCycle - cyclesBefore(k));
+    if ~isempty(cycles)
+        [parts{k, :}] = readFile(D, cycles);
+    end
 end
 
 off = struct();
@@ -63,22 +86,30 @@ off.y = vertcat(parts{:, 2});
 off.z = vertcat(parts{:, 3});
 off.syncPending = vertcat(parts{:, 4});
 off.dmdSyncPin = vertcat(parts{:, 5});
+off.medianXY = round([median(double(off.x)) median(double(off.y))]);
+off.linesRead = [(firstCycle - 1) * P + 1, lastCycle * P];
+if off.linesRead(1) > 1 || off.linesRead(2) < numLines
+    % same length as the recording, so that callers index by line as before
+    nBefore = off.linesRead(1) - 1; nAfter = numLines - off.linesRead(2);
+    for f = {'x', 'y', 'z', 'syncPending', 'dmdSyncPin'}
+        v = off.(f{1});
+        off.(f{1}) = [repmat(v(1), nBefore, 1); v; repmat(v(end), nAfter, 1)];
+    end
+end
 off.linesPerCycle = P;
 off.numLines = numel(off.x);
 off.xySwitchLines = find(diff(off.x) ~= 0 | diff(off.y) ~= 0) + 1;
 off.yEff = dmdY(off.x, off.y, off.xySwitchLines, opts.YLead);
 off.yLead = opts.YLead;
-off.medianXY = round([median(double(off.x)) median(double(off.y))]);
 end
 
-function [x, y, z, syncPending, dmdSyncPin] = readFile(D)
+function [x, y, z, syncPending, dmdSyncPin] = readFile(D, cycles)
 % header layout (bytes): 16-19 flags, 20-21 xOffset_pix, 22-23 yOffset_pix,
 % 32-35 zOffset_um (optional); rawData is read as int16 words
 if ~strcmpi(D.rawData.Format, 'int16')
     D.rawData.Format = 'int16';
 end
-nC = double(D.numCycles);
-cycleOffsets = (0:nC-1) * (double(D.header.bytesPerCycle) / 2);
+cycleOffsets = (double(cycles(:)') - 1) * (double(D.header.bytesPerCycle) / 2);
 idxs = double(D.lineHeaderIdxs(:)) + cycleOffsets;   % word index of each line header, lines x cycles
 idxs = idxs(:)';
 w = [8; 9; 10; 11] + idxs;
