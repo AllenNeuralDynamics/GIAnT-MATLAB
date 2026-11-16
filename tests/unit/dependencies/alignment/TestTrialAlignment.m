@@ -1,8 +1,8 @@
 classdef TestTrialAlignment < matlab.unittest.TestCase
     %TESTTRIALALIGNMENT Unit tests for SILo's across-trial alignment tools:
     %   warpImageAffine, warpTrialImage, trialWarpCoords, trialWarpInverse,
-    %   patchFieldMatrix, interpFramesAt, alignTrialsAffine and
-    %   alignTrialsPatchwise. The fits are tested on a synthetic labeled
+    %   patchFieldMatrix, patchFieldApply, interpFramesAt, trialHalves,
+    %   alignTrialsAffine and alignTrialsPatchwise. The fits are tested on a synthetic labeled
     %   neuron (dendrites with spines, an unscanned band and a hole) warped by
     %   known affine maps and smooth bends, with shot-like noise.
     %   Run with: runtests('tests/unit/dependencies/alignment/TestTrialAlignment.m')
@@ -56,6 +56,33 @@ classdef TestTrialAlignment < matlab.unittest.TestCase
             a = warpTrialImage(IM, warp, 1, 'linear'); b = warpImageAffine(IM, A, 'linear');
             testCase.verifyEqual(isnan(a), isnan(b));
             testCase.verifyLessThan(max(abs(a(:) - b(:)), [], 'omitnan'), 1e-9);
+        end
+
+        function testFieldApplyMatchesFieldMatrix(testCase)
+            % evaluating a bent field without forming the field matrix gives
+            % the same displacements
+            nodes = [rand(40, 1)*200 + 50, rand(40, 1)*400 + 50];
+            A = [1.004 0.002 0.7; -0.003 0.997 -1.2];
+            d = (A(:, 1:2)*nodes' + A(:, 3) - nodes' + 0.4*randn(2, 40))';
+            r = rand(5000, 1)*300; c = rand(5000, 1)*500;
+            testCase.verifyEqual(patchFieldApply(nodes, 25, r, c, d), patchFieldMatrix(nodes, 25, r, c)*d, 'AbsTol', 1e-10);
+            two = nodes(1:2, :);   % fewer than 3 centres: the plane is their mean
+            testCase.verifyEqual(patchFieldApply(two, 25, r, c, d(1:2, :)), patchFieldMatrix(two, 25, r, c)*d(1:2, :), 'AbsTol', 1e-10);
+        end
+
+        function testTrialHalvesAreEqual(testCase)
+            % alternating blocks, balanced so that the halves differ by at most
+            % one frame, also when the last block is partial or the trial is
+            % shorter than two blocks
+            for nF = [41 2000 2021 2039 7 1]
+                h = trialHalves(nF, 40);
+                testCase.verifyLessThanOrEqual(abs(nnz(h == 1) - nnz(h == 2)), 1, sprintf('%d frames', nF));
+                testCase.verifyTrue(all(h == 1 | h == 2));
+            end
+            h = trialHalves(2000, 40);   % 50 full blocks: untouched alternation
+            testCase.verifyEqual(h, mod(floor((0:1999)/40), 2) + 1);
+            h = trialHalves(41, 40);     % one block and a frame
+            testCase.verifyEqual(h, [ones(1, 21), 2*ones(1, 20)]);
         end
 
         function testInverseUndoesBentField(testCase)

@@ -21,7 +21,7 @@ rT = r; cT = c;
 chunk = 50000; %points per block, to bound memory for whole images
 for i0 = 1:chunk:numel(r)
     ix = i0:min(i0+chunk-1, numel(r));
-    u = patchFieldMatrix(warp.nodes, warp.sigma, r(ix), c(ix)) * d;
+    u = patchFieldApply(warp.nodes, warp.sigma, r(ix), c(ix), d);
     rT(ix) = r(ix) + u(:,1);
     cT(ix) = c(ix) + u(:,2);
 end

@@ -1,7 +1,8 @@
 function  [IM, meanIM, IMc, aData, peaks, discardFrames, halfIMs]= loadAndProcessTrialAsync(mocoDr, fn, numChannels, params)
 % mocoDr: directory with motion-corrected outputs (downsampled registered TIFF/H5 and *_ALIGNMENTDATA.h5).
 % halfIMs: rows x cols x channels x 2, the mean images of two independent
-% halves of the frames (alternating 0.5 s blocks), for the reliability weights
+% halves of the frames of equal size (alternating 0.5 s blocks, balanced by
+% trialHalves), for the reliability weights
 % of the patchwise across-trial alignment (alignTrialsPatchwise); empty unless
 % params.interTrialAlignment is 'patchwise'.
     if endsWith(fn, '.h5')
@@ -25,11 +26,9 @@ function  [IM, meanIM, IMc, aData, peaks, discardFrames, halfIMs]= loadAndProces
 
     halfIMs = [];
     if isfield(params, 'interTrialAlignment') && strcmpi(params.interTrialAlignment, 'patchwise')
-        %halves from alternating blocks rather than alternating frames, because
-        %neighbouring downsampled frames share noise; summed frame by frame to
-        %avoid copying the movie
-        blockLen = max(1, round(0.5*params.alignHz));
-        half = mod(floor((0:size(IM,4)-1)/blockLen), 2) + 1;
+        %two equal halves from alternating 0.5 s blocks of frames (see
+        %trialHalves); summed frame by frame to avoid copying the movie
+        half = trialHalves(size(IM,4), round(0.5*params.alignHz));
         halfIMs = nan([size(meanIM, [1 2 3]) 2], 'like', meanIM);
         for h = 1:2
             frames = find(half == h);

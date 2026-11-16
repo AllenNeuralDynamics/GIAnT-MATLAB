@@ -34,8 +34,9 @@ function [warp, info] = alignTrialsPatchwise(M, tforms, Mhalves, patchPx, nRound
 %   frame keeps the trials' average geometry. A weak penalty puts centres with
 %   little imaged structure in a trial on the plane.
 %
-%   MHALVES (H x W x T x 2) holds two independent halves of the data in M
-%   (e.g. interleaved blocks of frames). Each trial is refit on both halves;
+%   MHALVES (H x W x T x 2) holds two independent halves of the data in M, of
+%   equal size, so that their mean is M (e.g. interleaved blocks of frames,
+%   balanced as loadAndProcessTrialAsync does). Each trial is refit on both halves;
 %   their disagreement gives the noise of each centre's departure from the
 %   plane, and the departures are scaled by max(0, 1 - noise variance /
 %   variance across trials), so a patch whose bend is not above its noise
@@ -128,7 +129,7 @@ else
     for t = trials
         dBend(:,:,t) = (E*(Dh(:,:,t,1) - Dh(:,:,t,2))')';
     end
-    noiseVar = mean(reshape(permute(dBend(:,:,trials), [2 1 3]), K, []).^2, 2)' / 4; %each half has twice the noise variance of the full data
+    noiseVar = mean(reshape(permute(dBend(:,:,trials), [2 1 3]), K, []).^2, 2)' / 4; %halves of equal size (see MHALVES) each have twice the noise variance of the full data
     weight = max(0, 1 - noiseVar ./ bendVar);
     weight(~(bendVar > 0)) = 0;
 end
