@@ -267,7 +267,7 @@ for DMDix = nDMDs:-1:1
             disp(['  RMS change from rigid alignment per valid trial (px): ' mat2str(round(affInfo.rmsDisp(validTrials), 2))]);
         end
         %rigid-equivalent offsets: the displacement at the image centre, for
-        %per-frame motion records and for moving user ROIs into the common frame
+        %per-frame motion records
         x0 = [(szm1+1)/2; (szm2+1)/2];
         for trialIx = alignedTrials
             [rC, cC] = trialWarpCoords(warp, trialIx, x0(1), x0(2));
@@ -295,9 +295,10 @@ for DMDix = nDMDs:-1:1
     sz = size(actIM);
 
     %user ROIs are in the frame of the trial they were annotated on; move them
-    %into the consensus frame that actIM and extraction use
+    %into the consensus frame that actIM and extraction use, through that
+    %trial's full map (a shift for rigid alignment)
     if ~isempty(ROIs) && DMDix <= numel(ROIs)
-        ROIs(DMDix) = roisToConsensusFrame(ROIs(DMDix), trialTable.motion_correction.fn_reg_ds(DMDix,:), motOutput, sz(1:2));
+        ROIs(DMDix) = roisToConsensusFrame(ROIs(DMDix), trialTable.motion_correction.fn_reg_ds(DMDix,:), motOutput, sz(1:2), warp);
     end
 
     %Mask out somata from activity image
