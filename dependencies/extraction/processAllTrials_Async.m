@@ -283,21 +283,22 @@ if params.isSLAP2
             nFramesInBlock = length(fIxs);
             
             Y = IM(:,:,:,fIxs); %reduce communication overhead to parallel workers
-            nanMask = isnan(Y(:,:,orderedChannels,:)); %Y2 below is in analysis channel order
             Y2 = nan(length(viewR),length(viewC),numChannels, nFramesInBlock);
             Finv = nan(length(viewR),length(viewC),nFramesInBlock);
             if isShift
                 parfor frIx = 1:nFramesInBlock
                     [Y2(:,:,:,frIx), Finv(:,:,frIx)] = interpFrames(Y(:,:,orderedChannels,frIx),viewC, viewR, Fresh);
                 end
+                Y2(isnan(Y(:,:,orderedChannels,:))) = nan; %Y2 is in analysis channel order
             else
+                %interpFramesAt is NaN wherever a mapped neighbour is NaN; the
+                %input's NaN mask is on the unwarped grid, so it does not apply
                 parfor frIx = 1:nFramesInBlock
                     [Yf, Ff] = interpFramesAt(Y(:,:,orderedChannels,frIx), rW, cW, Fresh);
                     Y2(:,:,:,frIx) = reshape(Yf, size(Fresh,1), size(Fresh,2), []);
                     Finv(:,:,frIx) = reshape(Ff, size(Fresh,1), size(Fresh,2));
                 end
             end
-            Y2(nanMask) = nan;
 
             Y2 = reshape(Y2, nPx, numChannels, nFramesInBlock);
             Finv= reshape(Finv, nPx, nFramesInBlock);
