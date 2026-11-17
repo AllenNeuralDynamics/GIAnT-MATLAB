@@ -5,9 +5,6 @@ name: Code Ocean integration
 # so every new commit needs a fresh approval. The result is set as the
 # `Code Ocean integration` commit status on the commit under test.
 on:
-  # TEMPORARY: exercise the check from the feature branch before merge; remove before merging the PR.    
-  push:    
-    branches: [feat/co-integration-check]
   pull_request_target:
     types: [labeled]
     branches: [main]
