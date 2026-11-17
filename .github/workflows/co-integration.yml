@@ -54,13 +54,15 @@ jobs:
 
       - uses: astral-sh/setup-uv@v6
 
-      - name: Run integration pipeline
+      - name: Run integration tests
         env:
           CODEOCEAN_TOKEN: ${{ secrets.CODEOCEAN_TOKEN }}
         run: >
           uv run --no-project --with codeocean==0.17.0
+          --with aind-codeocean-dispatch==0.6.0
           .github/scripts/co_integration.py
-          --pipeline-id "${{ vars.CO_INTEGRATION_TEST_PIPELINE_ID }}"
+          --capsule-id "${{ vars.CO_INTEGRATION_TEST_CAPSULE_ID }}"
+          --data-asset-ids ${{ fromJSON(vars.CO_TEST_DATA_ASSET_IDS) }}
           --commit "$TEST_COMMIT"
 
       - name: Set final status

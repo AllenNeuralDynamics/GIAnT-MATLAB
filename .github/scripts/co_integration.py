@@ -1,24 +1,11 @@
-"""Run a Code Ocean integration pipeline at a commit and report its verdict.
+"""Run a Code Ocean integration capsule for each data asset at the given commit and report the outcomes.
 
-Contract with the pipeline:
+Contract with the capsule:
 
 - It accepts the commit under test as a named parameter (``--commit-param``).
-- Its final step writes ``integration_verdict.json`` at the root of its results::
+- It exits 0 when every check passes and nonzero when a check fails or cannot run.
 
-      {
-        "schema_version": 1,
-        "status": "pass" | "fail" | "error",
-        "commit": "<commit that ran>",
-        "summary": "<optional one line for the pull request>",
-        "datasets": [{"name": "...", "status": "pass" | "fail" | "error", "message": "..."}]
-      }
-
-  ``fail`` means it ran and a check failed; ``error`` means something could not run.
-- It exits nonzero when it cannot finish. It may exit 0 with a ``fail`` verdict, since a
-  failing final step can stop Nextflow from publishing the verdict.
-
-The check passes when the pipeline exits 0, the verdict status is ``pass``, and the
-verdict commit matches the commit under test. A missing or unreadable verdict is an error.
+The check passes when every capsule run completes with exit code 0. A failed, cancelled, or timed-out run fails the check and cancels the runs still in flight.
 """
 
 import argparse
@@ -28,25 +15,24 @@ import sys
 import urllib.error
 import urllib.request
 
+from aind_codeocean_dispatch import Job, Outcome, job_key, run_jobs
 from codeocean import CodeOcean
-from codeocean.computation import ComputationState, NamedRunParam, RunParams
+from codeocean.computation import DataAssetsRunParam, NamedRunParam, RunParams
 from codeocean.error import Error as CodeOceanError
 
 CO_DOMAIN = "https://codeocean.allenneuraldynamics.org"
 POLL_SECONDS = 60
 LOG_FILE = "output"
-VERDICT_FILE = "integration_verdict.json"
-SCHEMA_VERSION = 1
-PASS = "pass"
 LOG_TAIL_LINES = 40
 
 
 def parse_args() -> argparse.Namespace:
     """Parse command-line arguments."""
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("--pipeline-id", required=True, help="Code Ocean pipeline id.")
+    parser.add_argument("--capsule-id", required=True, help="Code Ocean Capsule id.")
     parser.add_argument("--commit", required=True, help="Commit under test.")
-    parser.add_argument("--commit-param", default="test_commit", help="Pipeline parameter that receives the commit.")
+    parser.add_argument("--data-asset-ids", type=json.loads, default=[], help="JSON array of data asset ids.")
+    parser.add_argument("--commit-param", default="test_commit", help="Capsule parameter that receives the commit.")
     parser.add_argument("--timeout-minutes", type=float, default=330, help="Maximum run time to wait.")
     return parser.parse_args()
 
@@ -61,67 +47,27 @@ def read_result(client: CodeOcean, computation_id: str, path: str) -> str | None
         return None
 
 
-def start_run(client: CodeOcean, args: argparse.Namespace):
-    """Start the pipeline and confirm Code Ocean recorded the commit parameter."""
-    computation = client.computations.run_capsule(
-        RunParams(
-            pipeline_id=args.pipeline_id,
+def start_runs(client: CodeOcean, args: argparse.Namespace) -> list[Outcome]:
+    """Start one capsule run per data asset and wait for every outcome."""
+    jobs = []
+    for asset_id in args.data_asset_ids:
+        params = RunParams(
+            capsule_id=args.capsule_id,
+            data_assets=[DataAssetsRunParam(id=asset_id, mount="data")],
             named_parameters=[NamedRunParam(param_name=args.commit_param, value=args.commit)],
         )
+        jobs.append(Job(label=asset_id, run_params=params, key=job_key(params)))
+
+    return run_jobs(
+        client,
+        jobs,
+        launch_interval_s=1,
+        start_retries=3,
+        poll_interval_s=POLL_SECONDS,
+        timeout_s=args.timeout_minutes * 60,
+        cancel_on_failure=True,
+        on_outcome=print,
     )
-    recorded = {p.param_name: p.value for p in computation.parameters or [] if p.param_name}
-    if recorded.get(args.commit_param) != args.commit:
-        raise SystemExit(
-            f"Code Ocean recorded {args.commit_param}={recorded.get(args.commit_param)!r}, expected "
-            f"{args.commit!r}; check the parameter name in the pipeline's app panel."
-        )
-    return computation
-
-
-def run_failures(computation) -> list[str]:
-    """Return why the run itself failed; empty when it completed with exit code 0."""
-    if computation.state != ComputationState.Completed:
-        return [f"computation state is {computation.state.value}"]
-    if computation.exit_code != 0:
-        return [f"pipeline exited with code {computation.exit_code}"]
-    return []
-
-
-def parse_verdict(text: str | None) -> tuple[dict | None, list[str]]:
-    """Return the verdict and any contract violations in it."""
-    if text is None:
-        return None, [f"{VERDICT_FILE} is missing"]
-    try:
-        verdict = json.loads(text)
-    except json.JSONDecodeError as error:
-        return None, [f"{VERDICT_FILE} is not valid JSON: {error}"]
-    if not isinstance(verdict, dict):
-        return None, [f"{VERDICT_FILE} is not a JSON object"]
-    if verdict.get("schema_version") != SCHEMA_VERSION:
-        return verdict, [f"{VERDICT_FILE} schema_version is {verdict.get('schema_version')!r}, expected {SCHEMA_VERSION}"]
-    return verdict, []
-
-
-def verdict_failures(verdict: dict, commit: str) -> list[str]:
-    """Return failures stated by or implied by the verdict."""
-    failures = []
-    if verdict.get("status") != PASS:
-        failures.append(f"verdict status is {verdict.get('status')!r}")
-    if verdict.get("commit") != commit:
-        failures.append(f"pipeline ran commit {verdict.get('commit')!r}, expected {commit!r}")
-    return failures
-
-
-def dataset_table(datasets: list) -> list[str]:
-    """Return a markdown table of per-dataset results."""
-    rows = [d for d in datasets if isinstance(d, dict)]
-    if not rows:
-        return []
-    lines = ["", "| Dataset | Status | Message |", "| --- | --- | --- |"]
-    for d in rows:
-        message = str(d.get("message", "")).replace("|", "\\|").replace("\n", " ")
-        lines.append(f"| {d.get('name', '?')} | {d.get('status', '?')} | {message} |")
-    return lines
 
 
 def write_step_summary(text: str) -> None:
@@ -133,44 +79,37 @@ def write_step_summary(text: str) -> None:
 
 
 def main() -> int:
-    """Run the pipeline, wait for it, report, and return a process exit code."""
+    """Run one capsule per data asset at the commit, report each outcome, and return a process exit code."""
     args = parse_args()
     client = CodeOcean(domain=CO_DOMAIN, token=os.environ["CODEOCEAN_TOKEN"])
-    slug = client.capsules.get_capsule(args.pipeline_id).slug
+    slug = client.capsules.get_capsule(args.capsule_id).slug
 
-    computation = start_run(client, args)
-    run_url = f"{CO_DOMAIN}/capsule/{slug}/tree?results={computation.id}_computation"
-    print(f"Started computation {computation.id} for {args.commit}: {run_url}", flush=True)
+    outcomes = start_runs(client, args)
 
-    verdict = None
-    try:
-        computation = client.computations.wait_until_completed(
-            computation, polling_interval=POLL_SECONDS, timeout=args.timeout_minutes * 60
-        )
-    except TimeoutError:
-        failures = [f"pipeline did not finish within {args.timeout_minutes} minutes"]
-    else:
-        failures = run_failures(computation)
-        verdict, contract_failures = parse_verdict(read_result(client, computation.id, VERDICT_FILE))
-        failures += contract_failures
-        if verdict is not None and not contract_failures:
-            failures += verdict_failures(verdict, args.commit)
+    tests_failed = False
+    sections = []
+    for outcome in outcomes:
+        comp_id = outcome.computation_ids[-1]
 
-    lines = [f"## Code Ocean integration check {'failed' if failures else 'passed'}"]
-    if verdict and verdict.get("summary"):
-        lines.append(str(verdict["summary"]))
-    lines += [f"- Commit: `{args.commit}`", f"- Run: [{computation.id}]({run_url})"]
-    lines += [f"- Failure: {f}" for f in failures]
-    if verdict:
-        lines += dataset_table(verdict.get("datasets", []))
-    if failures:
-        log = read_result(client, computation.id, LOG_FILE) or "log unavailable"
-        lines += ["", "Pipeline log (tail):", "```", *log.splitlines()[-LOG_TAIL_LINES:], "```"]
+        lines = [f"### {outcome.job.label}: {'passed' if outcome.ok else 'failed'}"]
+        run_url = f"{CO_DOMAIN}/capsule/{slug}/tree?results={comp_id}_computation"
+        lines.append(f"- Run: [{comp_id}]({run_url})")
 
-    text = "\n".join(lines)
+        if not outcome.ok:
+            tests_failed = True
+            lines.append(f"- Failure: job {outcome.status}: {outcome.failure}: {outcome.error}")
+            log = read_result(client, comp_id, LOG_FILE) or "log unavailable"
+            lines += ["", "Capsule log (tail):", "```", *log.splitlines()[-LOG_TAIL_LINES:], "```"]
+
+        sections.append("\n".join(lines))
+
+    header = "\n".join(
+        [f"## Code Ocean integration check {'failed' if tests_failed else 'passed'}", f"- Commit: `{args.commit}`"]
+    )
+    text = "\n\n".join([header, *sections])
     print(text)
     write_step_summary(text)
-    return 1 if failures else 0
+    return 1 if tests_failed else 0
 
 
 if __name__ == "__main__":
