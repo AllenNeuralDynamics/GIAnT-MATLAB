@@ -133,6 +133,41 @@ classdef TestFindSourcesWMF < matlab.unittest.TestCase
             testCase.verifyGreaterThan(min(hypot(seeds(:, 1) - c(1), seeds(:, 2) - c(2))), 3);
         end
 
+        function testOneTrialPeakDoesNotSuppressNeighbour(testCase)
+            % a peak strong in the combined image but active in only one
+            % trial, 4.5 px from a source active in all trials with no dip
+            % between them, would merge the source into itself and then be
+            % dropped; it is no candidate, so the source keeps its seed
+            src = TestFindSourcesWMF.grid();
+            c = [48.3 48.6]; b = c + [0 4.5];
+            act = TestFindSourcesWMF.simulate([src; c], ones(size(src, 1) + 1, 1), TestFindSourcesWMF.NTrials);
+            [C, R] = meshgrid(1:TestFindSourcesWMF.Sz(2), 1:TestFindSourcesWMF.Sz(1));
+            act(:, :, 3) = act(:, :, 3) + 45*exp(-((R - b(1)).^2 + (C - b(2)).^2)/(2*1.2^2));
+            p = TestFindSourcesWMF.params(); p.wmfDeblendth = Inf; % the merge alone, without deblending to recover the source
+            seeds = findSourcesWMF(act, p);
+            testCase.verifyLessThan(min(hypot(seeds(:, 1) - c(1), seeds(:, 2) - c(2))), 1, 'the source has a seed within 1 px');
+            testCase.verifyGreaterThan(min(hypot(seeds(:, 1) - b(1), seeds(:, 2) - b(2))), 2, 'the one-trial peak has none');
+        end
+
+        function testExcludedPeakDoesNotSuppressNeighbour(testCase)
+            % a strong source inside the exclusion mask (e.g. a soma), 4.5 px
+            % from a weaker one outside it with no dip between them: the
+            % masked peak is no candidate, so the weaker source keeps its
+            % seed, with or without deblending, and no seed lies in the mask
+            src = TestFindSourcesWMF.grid();
+            s = [48.3 48.6]; a = s + [0 4.5];
+            act = TestFindSourcesWMF.simulate([src; s; a], [ones(size(src, 1), 1); 3; 1], TestFindSourcesWMF.NTrials);
+            [C, R] = meshgrid(1:TestFindSourcesWMF.Sz(2), 1:TestFindSourcesWMF.Sz(1));
+            mask = hypot(R - s(1), C - s(2)) <= 1.5;
+            p = TestFindSourcesWMF.params(); p.wmfDeblendth = Inf;
+            for pp = {p, TestFindSourcesWMF.params()}
+                seeds = findSourcesWMF(act, pp{1}, mask);
+                testCase.verifyLessThan(min(hypot(seeds(:, 1) - a(1), seeds(:, 2) - a(2))), 1, 'the source outside the mask has a seed within 1 px');
+                testCase.verifyFalse(any(mask(sub2ind(size(mask), round(seeds(:, 1)), round(seeds(:, 2))))), 'no seed in the mask');
+                testCase.verifyLessThan(max(TestFindSourcesWMF.nearest(src, seeds)), 1, 'the grid is still found');
+            end
+        end
+
         function testFewTrials(testCase, nFew)
             % below 4 trials (e.g. one long recording) there are no halves to
             % test and sources need be active in only one trial; strong

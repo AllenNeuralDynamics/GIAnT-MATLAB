@@ -1,4 +1,4 @@
-function [seeds, info] = findSourcesWMF(actT, params)
+function [seeds, info] = findSourcesWMF(actT, params, excludeMask)
 %FINDSOURCESWMF Source seeds from the trials' aligned activity images.
 %
 %   [SEEDS, INFO] = FINDSOURCESWMF(ACTT, PARAMS) finds sources in ACTT
@@ -6,6 +6,10 @@ function [seeds, info] = findSourcesWMF(actT, params)
 %   (NaN where not imaged). SEEDS is N x 2 [row col], 1-indexed and subpixel,
 %   strongest first. Uses params.wmfPeakth, params.wmfDip,
 %   params.wmfDeblendth and params.nanThresh.
+%
+%   FINDSOURCESWMF(ACTT, PARAMS, EXCLUDEMASK) seeds nothing where the
+%   rows x cols logical EXCLUDEMASK is true (e.g. somata), as getActImPeaks
+%   does with its exclusion mask.
 %
 %   1. Each trial's image minus its local 5x5 median, as a robust z-score
 %      (median and MAD over the image), as each trial's own peak finding does.
@@ -22,8 +26,10 @@ function [seeds, info] = findSourcesWMF(actT, params)
 %      those. R is the autocorrelation of Z away from activity, which carries
 %      the correlation of the noise along scan lines. F is Z correlated with
 %      R^-1 K, again as a robust z-score.
-%   4. Local maxima of F above params.wmfPeakth are candidates. From the
-%      strongest down, a candidate within MERGEPX of a stronger kept one is
+%   4. Local maxima of F above params.wmfPeakth are candidates, except those
+%      in EXCLUDEMASK or active (as in 7) in fewer than MINTRIALS trials,
+%      which could otherwise suppress a neighbour and then be dropped
+%      themselves. From the strongest down, a candidate within MERGEPX of a stronger kept one is
 %      merged into it unless F dips by at least params.wmfDip between them, and
 %      by params.wmfDip/sqrt(2) in each half of the trials (alternate trials,
 %      filtered alike). Two sources are kept apart only where they are resolved
@@ -38,9 +44,9 @@ function [seeds, info] = findSourcesWMF(actT, params)
 %      and params.wmfDeblendth/sqrt(2) in the residual of each half of the
 %      trials, fitted at the same positions. Refit and repeat. This resolves
 %      sources too close to show a dip in F, where they reproduce in both
-%      halves. Seeds then sit at their fitted positions. params.wmfDeblendth
-%      = Inf skips this step.
-%   7. A seed must show activity (its trial's z image smoothed with a 1 px
+%      halves. No seed is added in EXCLUDEMASK. Seeds then sit at their
+%      fitted positions. params.wmfDeblendth = Inf skips this step.
+%   7. A seed must lie outside EXCLUDEMASK and show activity (its trial's z image smoothed with a 1 px
 %      Gaussian, above ZPRES within 1 px) in at least MINTRIALS trials.
 %
 %   With fewer than 2*MINHALF imaged trials (e.g. one long recording), the
@@ -55,20 +61,25 @@ function [seeds, info] = findSourcesWMF(actT, params)
 
 MERGEPX = 6; ZPRES = 4; MINTRIALS = 2; MINHALF = 2;
 [H, W, T] = size(actT);
+if nargin < 3 || isempty(excludeMask)
+    excludeMask = false(H, W);
+end
 seeds = zeros(0, 2);
 info = struct('Z', [], 'F', [], 'K', [], 'R', [], 'value', zeros(0, 1), 'nTrials', zeros(0, 1), 'added', false(0, 1));
 if T == 0 || all(isnan(actT(:)))
     return
 end
 
-zT = nan(H, W, T); zS = zT;
+zT = nan(H, W, T); zA = -inf(H, W, T);
 g = fspecial('gaussian', 7, 1);
 for t = 1:T
     a = double(actT(:, :, t));
     if all(isnan(a(:))), continue, end
     zT(:, :, t) = robustZ(a - nanmedfilt2(a, [5 5]));
-    zS(:, :, t) = robustZ(filtNan(zT(:, :, t), g));
+    z = robustZ(filtNan(zT(:, :, t), g)); z(isnan(z)) = -inf;
+    zA(:, :, t) = ordfilt2(z, 9, ones(3)); % activity within 1 px
 end
+nActive = @(ix) sum(zA(ix + (0:T-1)*H*W) > ZPRES, 2);
 imaged = find(squeeze(any(~isnan(zT), [1 2])))';
 useHalves = numel(imaged) >= 2*MINHALF;
 minTrials = MINTRIALS;
@@ -85,7 +96,9 @@ end
 
 E = F; E(isnan(E)) = -inf;
 [r, c] = find(E == ordfilt2(E, 9, ones(3)) & E > params.wmfPeakth);
-v = E(sub2ind([H W], r, c));
+ix = sub2ind([H W], r, c);
+ok = ~excludeMask(ix) & nActive(ix) >= minTrials;
+r = r(ok); c = c(ok); v = E(ix(ok));
 [v, o] = sort(v, 'descend'); r = r(o); c = c(o);
 keep = true(size(r));
 for i = 2:numel(r)
@@ -121,23 +134,18 @@ end
 
 added = false(numel(v), 1);
 if useHalves && isfinite(params.wmfDeblendth) && ~isempty(seeds)
-    [seeds, v, added] = deblend(Z, Zh, seeds, v, K, flt, max(params.wmfDeblendth, params.wmfPeakth), MERGEPX);
+    [seeds, v, added] = deblend(Z, Zh, seeds, v, K, flt, max(params.wmfDeblendth, params.wmfPeakth), MERGEPX, excludeMask);
 end
 
 ix = sub2ind([H W], round(seeds(:, 1)), round(seeds(:, 2)));
-nTrials = zeros(numel(v), 1);
-for t = 1:T
-    z = zS(:, :, t); z(isnan(z)) = -inf;
-    zm = ordfilt2(z, 9, ones(3));
-    nTrials = nTrials + (zm(ix) > ZPRES);
-end
-ok = nTrials >= minTrials;
+nTrials = nActive(ix);
+ok = nTrials >= minTrials & ~excludeMask(ix);
 seeds = seeds(ok, :);
 info = struct('Z', Z, 'F', F, 'K', K, 'R', R, 'value', v(ok), 'nTrials', nTrials(ok), 'added', added(ok));
 end
 
 
-function [P, v, added] = deblend(Z, Zh, P0, v, K, flt, th, mergePx)
+function [P, v, added] = deblend(Z, Zh, P0, v, K, flt, th, mergePx, excludeMask)
 % fit copies of K at the seeds and add the significant maxima of the matched
 % filter of the residual near them, while they reproduce in both halves
 MAXSHIFT = 1.5; MINSEP = 1;
@@ -157,7 +165,7 @@ for it = 1:max(20, numel(v))
     for k = 1:size(P, 1)
         dmin = min(dmin, hypot(YY - P(k, 1), XX - P(k, 2)));
     end
-    Fr(dmin > mergePx | dmin < MINSEP | rejected) = -inf;
+    Fr(dmin > mergePx | dmin < MINSEP | rejected | excludeMask) = -inf;
     [vm, ix] = max(Fr(:));
     if vm < th
         break
