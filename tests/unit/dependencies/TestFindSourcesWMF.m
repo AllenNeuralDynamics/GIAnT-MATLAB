@@ -168,6 +168,39 @@ classdef TestFindSourcesWMF < matlab.unittest.TestCase
             end
         end
 
+        function testFlatAndSparseTrials(testCase)
+            % a trial with no activity (constant) or almost none (a sparse
+            % activity image) has zero MAD; it still scores as measured, so it
+            % neither puts Inf into the filtered image nor counts as unimaged
+            src = TestFindSourcesWMF.grid();
+            act = TestFindSourcesWMF.simulate(src, ones(size(src, 1), 1), 4);
+            p = TestFindSourcesWMF.params();
+            ref = findSourcesWMF(act, p);
+            testCase.assertNotEmpty(ref);
+            sz = TestFindSourcesWMF.Sz;
+            sparse = zeros(sz); sparse(sub2ind(sz, round(src(1:5, 1)), round(src(1:5, 2)))) = 3;
+            extra = {zeros([sz 2]), sparse}; names = {'two flat trials', 'a sparse trial'};
+            for k = 1:2
+                [seeds, info] = findSourcesWMF(cat(3, act, extra{k}), p);
+                testCase.verifyTrue(all(isfinite(info.F(~isnan(info.Z)))), [names{k} ': the filtered image is finite']);
+                testCase.verifyLessThan(max(TestFindSourcesWMF.nearest(ref, seeds)), 1, [names{k} ': the seeds of the other trials are found again']);
+            end
+        end
+
+        function testNoBackgroundToMeasureNoise(testCase)
+            % a small imaged window packed with sources: every imaged pixel is
+            % near activity, so no background is left to measure the noise
+            % autocorrelation on, and the noise is taken as white
+            rows = 44:56;
+            [c, r] = meshgrid(45:5:55, 45:5:55); src = [r(:) c(:)] + [0.3 -0.2];
+            act = TestFindSourcesWMF.simulate(src, 8*ones(size(src, 1), 1), TestFindSourcesWMF.NTrials, [0.8 0.8]);
+            m = false(TestFindSourcesWMF.Sz); m(rows, rows) = true;
+            act(repmat(~m, 1, 1, TestFindSourcesWMF.NTrials)) = nan;
+            [~, info] = findSourcesWMF(act, TestFindSourcesWMF.params());
+            testCase.verifyEqual(nnz(info.R), 1, 'white noise');
+            testCase.verifyTrue(all(isfinite(info.F(m))), 'the filtered image is finite wherever imaged');
+        end
+
         function testFewTrials(testCase, nFew)
             % below 4 trials (e.g. one long recording) there are no halves to
             % test and sources need be active in only one trial; strong

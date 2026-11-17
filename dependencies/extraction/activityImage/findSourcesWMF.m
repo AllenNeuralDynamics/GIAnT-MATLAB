@@ -109,8 +109,9 @@ for i = 2:numel(r)
         xs = c(i) + tt*(c(j) - c(i)); ys = r(i) + tt*(r(j) - r(i));
         resolved = v(i) - min(interp2(F, xs, ys)) >= params.wmfDip;
         for h = 1:2*useHalves
+            % both maxima must be measured in the half (NaN where too few of its trials were imaged)
             ln = interp2(Fh{h}, xs, ys);
-            resolved = resolved && min(ln(1), ln(end)) - min(ln) >= params.wmfDip/sqrt(2);
+            resolved = resolved && all(isfinite(ln([1 end]))) && min(ln(1), ln(end)) - min(ln) >= params.wmfDip/sqrt(2);
         end
         if ~resolved
             keep(i) = false;
@@ -155,15 +156,16 @@ valid = ~isnan(Z);
 added = false(numel(v), 1);
 [P, ~, Zres] = fitSeeds(Z, P0, P0, kg, hw, valid, MAXSHIFT);
 fltH = {halfNorm(flt, Zh{1}), halfNorm(flt, Zh{2})};
-[XX, YY] = meshgrid(1:W, 1:H);
 rejected = false(H, W);
 for it = 1:max(20, numel(v))
     Fr = applyFilt(flt, Zres);
     Fr(isnan(Fr)) = -inf;
     Fr(Fr < ordfilt2(Fr, 9, ones(3))) = -inf;
-    dmin = inf(H, W);
+    dmin = inf(H, W); % distance to the nearest seed, where that is within mergePx
     for k = 1:size(P, 1)
-        dmin = min(dmin, hypot(YY - P(k, 1), XX - P(k, 2)));
+        rr = max(floor(P(k, 1) - mergePx), 1):min(ceil(P(k, 1) + mergePx), H);
+        cc = max(floor(P(k, 2) - mergePx), 1):min(ceil(P(k, 2) + mergePx), W);
+        dmin(rr, cc) = min(dmin(rr, cc), hypot(rr' - P(k, 1), cc - P(k, 2)));
     end
     Fr(dmin > mergePx | dmin < MINSEP | rejected | excludeMask) = -inf;
     [vm, ix] = max(Fr(:));
@@ -273,7 +275,7 @@ function fl = halfNorm(flt, Zh)
 % the full data's filter, as a robust z-score on a half's combined image
 fl = flt; fl.med = 0; fl.sc = 1;
 Fr = applyFilt(fl, Zh); x = Fr(~isnan(Fr));
-fl.med = median(x); fl.sc = mad(x, 1)/0.6741891400433162;
+fl.med = median(x); fl.sc = robustScale(x);
 end
 
 
@@ -296,9 +298,13 @@ act = imdilate(Z > CLIP, strel('disk', 3));
 M = double(m & ~act); B = Z; B(M == 0) = 0;
 nf = 2.^nextpow2([H W] + AHW + 1);
 acf = real(ifft2(abs(fft2(B, nf(1), nf(2))).^2)) ./ max(real(ifft2(abs(fft2(M, nf(1), nf(2))).^2)), 1);
-lag = -AHW:AHW;
-R = acf(mod(lag, nf(1)) + 1, mod(lag, nf(2)) + 1); R = R / R(AHW+1, AHW+1);
-[X, Y] = meshgrid(lag);
+lag = -AHW:AHW; [X, Y] = meshgrid(lag);
+R = acf(mod(lag, nf(1)) + 1, mod(lag, nf(2)) + 1);
+if R(AHW+1, AHW+1) > 0
+    R = R / R(AHW+1, AHW+1);
+else % no imaged pixel away from activity to measure the noise on: take it as white
+    R = double(X == 0 & Y == 0);
+end
 R = R .* cos(pi/2 * min(hypot(X, Y)/(AHW + 1), 1)).^2; %taper
 Rp = zeros(nf); Rp(mod(lag, nf(1)) + 1, mod(lag, nf(2)) + 1) = R;
 S = real(fft2(Rp)); S = max(S, SFLOOR*max(S(:))); %noise power spectrum
@@ -306,7 +312,7 @@ kl = -KHW:KHW;
 Kp = zeros(nf); Kp(mod(kl, nf(1)) + 1, mod(kl, nf(2)) + 1) = K;
 flt = struct('KS', conj(fft2(Kp)) ./ S, 'nf', nf, 'med', 0, 'sc', 1);
 F = applyFilt(flt, Z);
-x = F(~isnan(F)); flt.med = median(x); flt.sc = mad(x, 1)/0.6741891400433162;
+x = F(~isnan(F)); flt.med = median(x); flt.sc = robustScale(x);
 F = (F - flt.med)/flt.sc;
 end
 
@@ -385,7 +391,17 @@ end
 function z = robustZ(a)
 % z-score with median and MAD over the image, as getActImPeaks sets its threshold
 v = a(~isnan(a));
-z = (a - median(v)) / (mad(v, 1) / 0.6741891400433162);
+z = (a - median(v)) / robustScale(v);
+end
+
+
+function s = robustScale(v)
+% the SD estimated from the MAD; where more than half the values are equal
+% (e.g. a sparse activity image), the SD; 1 for a constant image, which then
+% scores 0. So a measured pixel never scores Inf or NaN
+s = mad(v, 1) / 0.6741891400433162;
+if ~(s > 0), s = std(v); end
+if ~(s > 0), s = 1; end
 end
 
 

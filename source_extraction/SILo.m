@@ -335,8 +335,10 @@ for DMDix = nDMDs:-1:1
     clear actValid
 
     sources = struct('R', [], 'C', [], 'V', []);
+    %actIM is NaN wherever a valid trial was not imaged; 'wmf' seeds by its own
+    %coverage test (nanThresh), so it can seed where no pixel is in every trial
     totalPix = sum(~isnan(actIM(:)) & ~somaMask(:));
-    if totalPix == 0 || isempty(thetaf)
+    if isempty(thetaf) || (~useWMF && totalPix == 0)
         k = 0;
     else
         sources.R = round(thetaf(:,2));
