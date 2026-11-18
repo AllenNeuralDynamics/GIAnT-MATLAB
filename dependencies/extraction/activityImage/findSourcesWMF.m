@@ -35,7 +35,7 @@ function [seeds, info] = findSourcesWMF(actT, params, excludeMask)
 %      filtered alike). Two sources are kept apart only where they are resolved
 %      reproducibly, so one source is not split into seeds at its edges.
 %   5. A seed's position is the centroid of Z over the 3x3 pixels around its
-%      maximum.
+%      maximum (its anchor).
 %   6. Deblending. Z is fitted as a sum of copies of K, one per seed, each
 %      with its own amplitude and subpixel position (within MAXSHIFT px of the
 %      seed). The strongest maximum of the matched filter of the residual
@@ -46,7 +46,9 @@ function [seeds, info] = findSourcesWMF(actT, params, excludeMask)
 %      sources too close to show a dip in F, where they reproduce in both
 %      halves. No seed is added in EXCLUDEMASK. Seeds then sit at their
 %      fitted positions. params.wmfDeblendth = Inf skips this step.
-%   7. A seed must lie outside EXCLUDEMASK and show activity (its trial's z image smoothed with a 1 px
+%   7. A seed whose position rounds to a pixel left out of Z (a gap the
+%      centroid or the fit moved it into) goes back to its anchor. It must lie
+%      outside EXCLUDEMASK and show activity (its trial's z image smoothed with a 1 px
 %      Gaussian, above ZPRES within 1 px) in at least MINTRIALS trials.
 %
 %   With fewer than 2*MINHALF imaged trials (e.g. one long recording), the
@@ -134,11 +136,15 @@ for k = 1:numel(r)
 end
 
 added = false(numel(v), 1);
+anchor = [r c]; % maxima of F, so imaged in Z
 if useHalves && isfinite(params.wmfDeblendth) && ~isempty(seeds)
-    [seeds, v, added] = deblend(Z, Zh, seeds, v, K, flt, max(params.wmfDeblendth, params.wmfPeakth), MERGEPX, excludeMask);
+    [seeds, v, added, anchor] = deblend(Z, Zh, seeds, v, K, flt, max(params.wmfDeblendth, params.wmfPeakth), MERGEPX, excludeMask, anchor);
 end
 
 ix = sub2ind([H W], round(seeds(:, 1)), round(seeds(:, 2)));
+gap = isnan(Z(ix));
+seeds(gap, :) = anchor(gap, :);
+ix(gap) = sub2ind([H W], anchor(gap, 1), anchor(gap, 2));
 nTrials = nActive(ix);
 ok = nTrials >= minTrials & ~excludeMask(ix);
 seeds = seeds(ok, :);
@@ -146,9 +152,10 @@ info = struct('Z', Z, 'F', F, 'K', K, 'R', R, 'value', v(ok), 'nTrials', nTrials
 end
 
 
-function [P, v, added] = deblend(Z, Zh, P0, v, K, flt, th, mergePx, excludeMask)
+function [P, v, added, A] = deblend(Z, Zh, P0, v, K, flt, th, mergePx, excludeMask, A)
 % fit copies of K at the seeds and add the significant maxima of the matched
-% filter of the residual near them, while they reproduce in both halves
+% filter of the residual near them, while they reproduce in both halves; A:
+% each seed's anchor (an added seed's is the residual maximum it came from)
 MAXSHIFT = 1.5; MINSEP = 1;
 [H, W] = size(Z); hw = (size(K, 1) - 1)/2;
 kg = griddedInterpolant({-hw:hw, -hw:hw}, K, 'cubic', 'none');
@@ -188,10 +195,10 @@ for it = 1:max(20, numel(v))
         rejected(near, nearC) = true;
         continue
     end
-    P = Pn; P0 = P0n; Zres = Zresn; v(end + 1, 1) = vm; added(end + 1, 1) = true; %#ok<AGROW>
+    P = Pn; P0 = P0n; Zres = Zresn; v(end + 1, 1) = vm; added(end + 1, 1) = true; A(end + 1, :) = [pr pc]; %#ok<AGROW>
 end
 P(:, 1) = min(max(P(:, 1), 1), H); P(:, 2) = min(max(P(:, 2), 1), W);
-[v, o] = sort(v, 'descend'); P = P(o, :); added = added(o);
+[v, o] = sort(v, 'descend'); P = P(o, :); added = added(o); A = A(o, :);
 end
 
 
@@ -325,13 +332,16 @@ function K = sourceKernel(Z, hw)
 % the widths of the strong maxima along rows and columns, when there are too few
 [H, W] = size(Z); [X, Y] = meshgrid(-hw:hw);
 E = Z; E(isnan(E)) = -inf;
-[r, c] = find(E == ordfilt2(E, 9, ones(3)) & E > 5);
+isMax = E == ordfilt2(E, 9, ones(3)) & E > 5;
+[r, c] = find(isMax);
 v = E(sub2ind([H W], r, c));
-D = hypot(r - r', c - c'); D(1:numel(r)+1:end) = inf;
+[dx, dy] = meshgrid(-6:6);
+nNear = conv2(double(isMax), double(hypot(dx, dy) <= 6), 'same'); % maxima within 6 px, itself included
+isolated = nNear(sub2ind([H W], r, c)) == 1;
 inside = r > hw + 1 & r < H - hw - 1 & c > hw + 1 & c < W - hw - 1;
 K = [];
 for zMin = [15 10 8]
-    k = find(v > zMin & min(D, [], 2) > 6 & inside);
+    k = find(v > zMin & isolated & inside);
     [~, o] = sort(v(k), 'descend'); k = k(o(1:min(end, 60)));
     acc = zeros(2*hw + 1); n = 0;
     for q = k'
@@ -348,14 +358,25 @@ for zMin = [15 10 8]
         break
     end
 end
-if isempty(K)
-    [sy, sx] = peakWidths(Z);
-    K = exp(-(Y.^2/(2*sy^2) + X.^2/(2*sx^2)));
+if ~isempty(K)
+    K = finishKernel(K, X, Y, hw);
 end
+% an empirical shape with a strong negative surround can sum to about zero or
+% less, which would blow up the filter or reverse its sign
+if isempty(K) || ~(sum(K(:)) > 0.25*sum(abs(K(:))))
+    [sy, sx] = peakWidths(Z);
+    K = finishKernel(exp(-(Y.^2/(2*sy^2) + X.^2/(2*sx^2))), X, Y, hw);
+end
+K = K / sum(K(:));
+end
+
+
+function K = finishKernel(K, X, Y, hw)
+% minus the median of its border, symmetric under a half turn, cut to a disk
+% of radius hw
 K = K - median([K(1, :), K(end, :), K(:, 1)', K(:, end)']);
 K = (K + rot90(K, 2))/2;
 K = K .* (hypot(X, Y) <= hw + 0.5);
-K = K / sum(K(:));
 end
 
 

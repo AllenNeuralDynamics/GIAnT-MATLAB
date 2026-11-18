@@ -201,6 +201,42 @@ classdef TestFindSourcesWMF < matlab.unittest.TestCase
             testCase.verifyTrue(all(isfinite(info.F(m))), 'the filtered image is finite wherever imaged');
         end
 
+        function testNoSeedOnUnimagedPixel(testCase)
+            % a source centred on a pixel imaged in no trial: the centroid of
+            % its bright neighbours rounds onto that pixel, where SILo would
+            % drop the seed as unmeasured; the seed goes back to its maximum
+            src = TestFindSourcesWMF.grid();
+            c = [48 48];
+            act = TestFindSourcesWMF.simulate([src; c], [ones(size(src, 1), 1); 2], TestFindSourcesWMF.NTrials);
+            act(c(1), c(2), :) = nan;
+            [seeds, info] = findSourcesWMF(act, TestFindSourcesWMF.params());
+            ix = sub2ind(TestFindSourcesWMF.Sz, round(seeds(:, 1)), round(seeds(:, 2)));
+            testCase.verifyFalse(any(isnan(info.Z(ix))), 'no seed rounds to a pixel left out of Z');
+            testCase.verifyLessThan(min(hypot(seeds(:, 1) - c(1), seeds(:, 2) - c(2))), 1.5, 'the source keeps a seed next to it');
+        end
+
+        function testNegativeSurroundFallsBackToGaussian(testCase)
+            % sources with a surround as strong as their centre give an
+            % empirical shape that sums to about zero; normalizing it would
+            % blow up or reverse the filter, so K falls back to a Gaussian
+            sz = TestFindSourcesWMF.Sz;
+            [C, R] = meshgrid(1:sz(2), 1:sz(1));
+            src = TestFindSourcesWMF.grid();
+            act = zeros([sz TestFindSourcesWMF.NTrials]);
+            for t = 1:TestFindSourcesWMF.NTrials
+                a = conv2(randn(sz + [0 2]), [1 2 1]/sqrt(6), 'valid');
+                for k = 1:size(src, 1)
+                    d2 = (R - src(k, 1)).^2 + (C - src(k, 2)).^2;
+                    a = a + TestFindSourcesWMF.Amp*(0.5 + rand)*(exp(-d2/2) - (1/2.2)^2*exp(-d2/(2*2.2^2))); % zero integral
+                end
+                act(:, :, t) = a;
+            end
+            [seeds, info] = findSourcesWMF(act, TestFindSourcesWMF.params());
+            [~, imax] = max(info.K(:));
+            testCase.verifyEqual(imax, sub2ind(size(info.K), 5, 5), 'K peaks at its centre');
+            testCase.verifyGreaterThanOrEqual(nnz(TestFindSourcesWMF.nearest(src, seeds) < 1), size(src, 1) - 2, 'the sources are found');
+        end
+
         function testFewTrials(testCase, nFew)
             % below 4 trials (e.g. one long recording) there are no halves to
             % test and sources need be active in only one trial; strong
