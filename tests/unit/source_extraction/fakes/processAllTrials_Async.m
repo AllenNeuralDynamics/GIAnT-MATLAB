@@ -1,9 +1,11 @@
-function E = processAllTrials_Async(dr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, motOutput, roiData, validTrials, params) %#ok<INUSD>
+function E = processAllTrials_Async(dr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, params) %#ok<INUSD>
 % Fake for SILo tests: records its inputs in dr/processAllTrials_Async_args.mat
-% and returns minimal per-trial extraction results for the valid trials,
-% with the fields saveExperimentSummaryH5/savePerTrialSummaryH5 read.
+% (with motOutput, the offset part of each trial's map) and returns minimal
+% per-trial extraction results for the valid trials, with the fields
+% saveExperimentSummaryH5/savePerTrialSummaryH5 read.
+motOutput = reshape(warp.affine(:,3,:), 2, []);
 save(fullfile(dr, 'processAllTrials_Async_args.mat'), 'dr', 'fns', 'fls', 'els', ...
-    'selPix', 'sources', 'discardFrames', 'motOutput', 'roiData', 'validTrials', 'params');
+    'selPix', 'sources', 'discardFrames', 'warp', 'motOutput', 'roiData', 'validTrials', 'params');
 
 nSources = numel(sources.R);
 nSelPix = nnz(any(selPix, 3));

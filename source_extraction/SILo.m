@@ -10,6 +10,10 @@ else
 end
 % Fixed values; user/GUI/JSON cannot override these in SILo
 params.minBaseline = 0.01;
+params.interTrialAlignment = lower(char(params.interTrialAlignment));
+if ~any(strcmp(params.interTrialAlignment, {'rigid', 'affine', 'patchwise'}))
+    error('SILo:interTrialAlignment', 'params.interTrialAlignment must be ''rigid'', ''affine'' or ''patchwise'', not ''%s''.', params.interTrialAlignment);
+end
 if ~nargin
     if ~isInteractiveSession()
         error('SILo:NonInteractive', 'No interactive display: pass the trial_table.h5 path (or its folder) to SILo.');
@@ -76,6 +80,7 @@ for DMDix = nDMDs:-1:1
         exptSummary.perTrialActIms{DMDix} = [];
         exptSummary.perTrialActIMsAligned{DMDix} = [];
         exptSummary.perTrialAlignmentOffsets{DMDix} = [];
+        exptSummary.perTrialAlignmentWarp{DMDix} = [];
         continue
     end
 
@@ -161,11 +166,11 @@ for DMDix = nDMDs:-1:1
     %Perform Localizations
     disp('Loading data and performing localizations...')
     stageTimer = tic;
-    mIM = cell(1, nTrials); aIM = cell(1,nTrials); alignData = cell(1, nTrials); peaks = cell(1, nTrials); discardFrames = cell(1,nTrials);
+    mIM = cell(1, nTrials); aIM = cell(1,nTrials); alignData = cell(1, nTrials); peaks = cell(1, nTrials); discardFrames = cell(1,nTrials); hIM = cell(1,nTrials);
     fns = trialTable.motion_correction.fn_reg_ds(DMDix, :);
     parfor (trialIx = 1:nTrials, nLocWorkers)
         if keepTrials(DMDix,trialIx)
-            [~, mIM{trialIx}, aIM{trialIx}, alignData{trialIx}, peaks{trialIx}, discardFrames{trialIx}]= loadAndProcessTrialAsync(mocodr, fns{trialIx}, numChannels, params);
+            [~, mIM{trialIx}, aIM{trialIx}, alignData{trialIx}, peaks{trialIx}, discardFrames{trialIx}, hIM{trialIx}]= loadAndProcessTrialAsync(mocodr, fns{trialIx}, numChannels, params);
         end
     end
     fprintf('[SILo timing] Path %d: localization %.1f s\n', DMDix, toc(stageTimer));
@@ -173,9 +178,16 @@ for DMDix = nDMDs:-1:1
     %Assemble same-sized mean images from different-sized trial means
     szm1 = max(cellfun(@(x)size(x,1),mIM)); szm2 = max(cellfun(@(x)size(x,2), aIM));
     meanIM = nan(szm1,szm2,numChannels, nTrials); activIM = nan(szm1,szm2,1, nTrials);
+    halfIM = []; %two independent halves of each trial's mean, for the patchwise fit's reliability weights
+    if strcmp(params.interTrialAlignment, 'patchwise')
+        halfIM = nan(szm1,szm2,numChannels,2, nTrials);
+    end
     for trialIx = 1:nTrials
         tmp =  mIM{trialIx};
         meanIM(1:size(tmp,1),1:size(tmp,2),:,trialIx) = tmp;
+        if ~isempty(halfIM) && ~isempty(hIM{trialIx})
+            halfIM(1:size(tmp,1),1:size(tmp,2),:,:,trialIx) = hIM{trialIx};
+        end
         tmp =  aIM{trialIx};
         activIM(1:size(tmp,1),1:size(tmp,2),:,trialIx) = tmp;
     end
@@ -187,10 +199,9 @@ for DMDix = nDMDs:-1:1
     samples = find(keepTrials(DMDix,:)); samples = samples(unique(round(linspace(1,length(samples),20))));
     template = makeConsensusTemplate(M(:,:,samples), maxshift);
 
-    %align all mean images to template
+    %align all mean images to template: a rigid shift per trial, refined to an
+    %affine map or a patchwise displacement field below
     disp('Aligning across trials...')
-    meanAligned = [];
-    actAligned = nan(size(meanIM,1), size(meanIM,2),1,nTrials);
     corrCoeff = nan(1,nTrials);
     motOutput = nan(2,nTrials);
     Mpad = nan([size(template) size(M,3)]);
@@ -208,18 +219,69 @@ for DMDix = nDMDs:-1:1
         output1 = dftregistration_clipped(tFFT, fft2(max(Mpad(:,:,trialIx), fillval)),1,80);
         mot1 = [-output1(3) -output1(4)];
         [motOutput(:,trialIx), corrCoeff(trialIx)] = xcorr2_nans(Mpad(:,:,trialIx), template, round(mot1'), maxshift);
-        [rr,cc] = ndgrid(1:size(meanIM,1), 1:size(meanIM,2));
-
-        for chIx = 1:size(meanIM,3)
-            meanAligned(:,:,chIx,trialIx) = interp2(meanIM(:,:,chIx,trialIx), cc+motOutput(2,trialIx), rr+motOutput(1,trialIx));
-        end
-        actAligned(:,:,1,trialIx) = interp2(activIM(:,:,1,trialIx), cc+motOutput(2,trialIx), rr+motOutput(1,trialIx));
+    end
+    %warp: every trial's map from the common frame to its image (see
+    %trialWarpCoords), here the rigid shifts
+    alignedTrials = find(~isnan(motOutput(1,:)));
+    warp = struct('affine', nan(2,3,nTrials), 'nodes', zeros(0,2), 'sigma', nan, 'disp', zeros(2,0,nTrials), 'patch', []);
+    for trialIx = alignedTrials
+        warp.affine(:,:,trialIx) = [1 0 motOutput(1,trialIx); 0 1 motOutput(2,trialIx)];
+    end
+    actAligned = nan(size(meanIM,1), size(meanIM,2),1,nTrials);
+    for trialIx = alignedTrials
+        actAligned(:,:,1,trialIx) = warpTrialImage(activIM(:,:,1,trialIx), warp, trialIx, 'linear');
     end
 
     %identify outliers in alignment quality to determine valid trials
     corrThresh = min(0.90, median(corrCoeff, 'omitnan')-2*std(corrCoeff, 'omitmissing'));
     actValidPix = squeeze(mean(~isnan(actAligned(:,:,1,:)), [1 2]));
     validTrials= find(corrCoeff(:)>corrThresh & actValidPix(:)>mean(actValidPix)/2);
+
+    %trial mean images also differ by small deformations that track motion (up
+    %to ~1 px at the edges of the field, and local bends of a few tenths of a
+    %pixel), which a shift per trial leaves in place; refine the valid trials'
+    %alignment groupwise. Trials that are aligned but not valid keep their shift
+    if ~strcmp(params.interTrialAlignment, 'rigid') && numel(validTrials) > 1
+        tformsValid = nan(size(warp.affine));
+        tformsValid(:,:,validTrials) = warp.affine(:,:,validTrials);
+        if strcmp(params.interTrialAlignment, 'patchwise')
+            disp('Refining across-trial alignment to patchwise displacement fields...')
+            Mhalves = permute(reshape(sum(halfIM, 3), szm1, szm2, 2, nTrials), [1 2 4 3]); %rows x cols x trials x 2, channels summed as in M
+            [pw, pwInfo] = alignTrialsPatchwise(M, tformsValid, Mhalves, params.alignPatchPx);
+            clear Mhalves
+            rigid = warp;
+            warp.nodes = pw.nodes; warp.sigma = pw.sigma; warp.patch = pw.patch;
+            warp.disp = nan(2, size(pw.nodes,1), nTrials);
+            for trialIx = alignedTrials
+                warp.disp(:,:,trialIx) = rigid.affine(:,1:2,trialIx)*pw.nodes' + rigid.affine(:,3,trialIx) - pw.nodes';
+            end
+            warp.disp(:,:,validTrials) = pw.disp(:,:,validTrials);
+            warp.affine(:,:,validTrials) = pw.affine(:,:,validTrials);
+            disp(['  ' int2str(size(pw.nodes,1)) ' patches of ' int2str(min(pwInfo.nPx)) '-' int2str(max(pwInfo.nPx)) ...
+                ' px; median reliability weight ' num2str(median(pwInfo.weight), 2)]);
+            disp(['  RMS change from rigid alignment per valid trial (px): ' mat2str(round(pwInfo.rmsDisp(validTrials), 2))]);
+        else
+            disp('Refining across-trial alignment to affine maps...')
+            [tformsValid, affInfo] = alignTrialsAffine(M, tformsValid);
+            warp.affine(:,:,validTrials) = tformsValid(:,:,validTrials);
+            disp(['  RMS change from rigid alignment per valid trial (px): ' mat2str(round(affInfo.rmsDisp(validTrials), 2))]);
+        end
+        %rigid-equivalent offsets: the displacement at the image centre, for
+        %per-frame motion records
+        x0 = [(szm1+1)/2; (szm2+1)/2];
+        for trialIx = alignedTrials
+            [rC, cC] = trialWarpCoords(warp, trialIx, x0(1), x0(2));
+            motOutput(:,trialIx) = [rC; cC] - x0;
+        end
+        for trialIx = alignedTrials
+            actAligned(:,:,1,trialIx) = warpTrialImage(activIM(:,:,1,trialIx), warp, trialIx, 'linear');
+        end
+    end
+    clear halfIM hIM
+    meanAligned = nan(size(meanIM));
+    for trialIx = alignedTrials
+        meanAligned(:,:,:,trialIx) = warpTrialImage(meanIM(:,:,:,trialIx), warp, trialIx, 'linear');
+    end
     exptSummary.meanIM{DMDix} = mean(meanAligned(:,:,:,validTrials),4, 'omitnan');
 
     %select sources on aligned activity image
@@ -233,9 +295,10 @@ for DMDix = nDMDs:-1:1
     sz = size(actIM);
 
     %user ROIs are in the frame of the trial they were annotated on; move them
-    %into the consensus frame that actIM and extraction use
+    %into the consensus frame that actIM and extraction use, through that
+    %trial's full map (a shift for rigid alignment)
     if ~isempty(ROIs) && DMDix <= numel(ROIs)
-        ROIs(DMDix) = roisToConsensusFrame(ROIs(DMDix), trialTable.motion_correction.fn_reg_ds(DMDix,:), motOutput, sz(1:2));
+        ROIs(DMDix) = roisToConsensusFrame(ROIs(DMDix), trialTable.motion_correction.fn_reg_ds(DMDix,:), motOutput, sz(1:2), warp);
     end
 
     %Mask out somata from activity image
@@ -313,11 +376,11 @@ for DMDix = nDMDs:-1:1
             end
             fls = trialTable.slap2_info.first_line(DMDix,:);
             els = trialTable.slap2_info.last_line(DMDix,:);
-            E = processAllTrials_Async(trialDataDr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, motOutput, roiData, validTrials, params);
+            E = processAllTrials_Async(trialDataDr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, params);
         else % non-SLAP2 (registered movies live under motion_correction)
             fls = cell(1,numel(fns));
             els = cell(1,numel(fns));
-            E = processAllTrials_Async(mocodr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, motOutput, roiData, validTrials, params);
+            E = processAllTrials_Async(mocodr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, params);
         end
         exptSummary.E(:,DMDix) = E;
         fprintf('[SILo timing] Path %d: extraction %.1f s\n', DMDix, toc(stageTimer));
@@ -332,6 +395,7 @@ for DMDix = nDMDs:-1:1
     exptSummary.perTrialActIms{DMDix} = actIM;
     exptSummary.perTrialActIMsAligned{DMDix} = actAligned;
     exptSummary.perTrialAlignmentOffsets{DMDix} = motOutput;
+    exptSummary.perTrialAlignmentWarp{DMDix} = warp;
 
     clear meanAligned meanIM actAligned E
     fprintf('[SILo timing] Path %d: total %.1f s\n', DMDix, toc(pathTimer));

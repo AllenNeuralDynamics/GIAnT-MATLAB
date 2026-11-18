@@ -85,6 +85,40 @@ classdef TestCompensatedExtraction < matlab.unittest.TestCase
             testCase.verifyLessThanOrEqual(filled(Fk), filled(Fu) + 0.001 * numel(Fu));
         end
 
+        function testWarpedExtractionSamplesMappedPositions(testCase)
+            % with an affine or bent patchwise map from the common frame to the
+            % trial, each common-frame pixel is sampled at its mapped position
+            % (plus the frame's motion, with and without compensation): the
+            % time-mean of its samples matches the registered mean image
+            % interpolated there as closely as with a sub-pixel shift (which
+            % takes the loader's shift path and has the same interpolation
+            % error), and the samples stay as steady
+            testCase.writeAcquisition();
+            [aU, aK, selPix] = testCase.registerBoth(9);
+            shift = TestCompensatedExtraction.shiftWarp([0.4; -0.3]);
+            maps = {TestCompensatedExtraction.affineWarp(), TestCompensatedExtraction.bentWarp()};
+            names = {'affine', 'patchwise'};
+            reg = {aU, aK}; regNames = {'uncompensated', 'compensated'};
+            for k = 1:2
+                M = squeeze(reg{k}.meanIM(1, :, :));
+                [Y0, F0] = testCase.extract(reg{k}, selPix, shift);
+                e0 = TestCompensatedExtraction.mismatch(Y0, M, selPix, shift);
+                for w = 1:2
+                    [Y, F] = testCase.extract(reg{k}, selPix, maps{w});
+                    e = TestCompensatedExtraction.mismatch(Y, M, selPix, maps{w});
+                    eIgnored = TestCompensatedExtraction.mismatch(Y, M, selPix, TestCompensatedExtraction.shiftWarp()); % as if the map were not applied
+                    testCase.log(1, sprintf('%s, %s map: mean mismatch %.4f (shift %.4f; map ignored %.4f), steadiness %.4f (shift %.4f)', ...
+                        regNames{k}, names{w}, e, e0, eIgnored, TestCompensatedExtraction.residual(Y), TestCompensatedExtraction.residual(Y0)));
+                    testCase.verifyTrue(all(isfinite(Y(:))), sprintf('%s, %s', regNames{k}, names{w}));
+                    testCase.verifyLessThan(e, 1.5*e0 + 0.005, sprintf('%s, %s: samples at the mapped positions', regNames{k}, names{w}));
+                    testCase.verifyGreaterThan(eIgnored, 2*e, sprintf('%s, %s: the map moves the samples', regNames{k}, names{w}));
+                    testCase.verifyLessThan(TestCompensatedExtraction.residual(Y), 1.25*TestCompensatedExtraction.residual(Y0) + 0.005);
+                    filled = @(Fi) nnz(Fi > 100 * median(Fi(:), 'omitnan'));
+                    testCase.verifyLessThanOrEqual(filled(F), filled(F0) + 0.001 * numel(F), sprintf('%s, %s: edge samples', regNames{k}, names{w}));
+                end
+            end
+        end
+
         function testExtractionWithoutSwitchesUnchanged(testCase)
             % with a constant online offset, compensation changes nothing
             testCase.writeAcquisition('updateEvery', 1e9);
@@ -99,6 +133,38 @@ classdef TestCompensatedExtraction < matlab.unittest.TestCase
             % of the pixels' mean (channel 1)
             y = double(Y(:, :, 1));
             r = median(std(y, 0, 2)) / std(mean(y, 2));
+        end
+
+        function e = mismatch(Y, M, selPix, warp)
+            % RMS difference between each selected pixel's time-mean sample and
+            % the registered mean image M at the pixel's mapped position,
+            % relative to the spread of those values
+            [r, c] = find(selPix);
+            [rT, cT] = trialWarpCoords(warp, 1, r, c);
+            m = interp2(double(M), cT, rT, 'linear');
+            y = mean(double(Y(:, :, 1)), 2);
+            ok = isfinite(m) & isfinite(y);
+            e = sqrt(mean((y(ok) - m(ok)).^2)) / std(m(ok));
+        end
+
+        function warp = shiftWarp(s)
+            if nargin < 1, s = [0; 0]; end
+            warp = struct('affine', [1 0 s(1); 0 1 s(2)], 'nodes', zeros(0, 2), 'sigma', nan, 'disp', zeros(2, 0), 'patch', []);
+        end
+
+        function warp = affineWarp()
+            % a stretch, shear and sub-pixel shift about the field's centre
+            A = [1.03 0.02; -0.015 0.97]; x0 = [20.5; 20.5];
+            warp = struct('affine', [A, x0 - A*x0 + [0.4; -0.3]], 'nodes', zeros(0, 2), 'sigma', nan, 'disp', zeros(2, 0), 'patch', []);
+        end
+
+        function warp = bentWarp()
+            % the affine map plus bends of up to 0.6 px at patch centres
+            a = TestCompensatedExtraction.affineWarp();
+            [nc, nr] = meshgrid([14 20 27], [13 20 28]); nodes = [nr(:) nc(:)];
+            bend = 0.6*[1 -0.5 0 0.3 -1 0.4 0 0.8 -0.6; -0.4 0.7 -1 0 0.5 0 0.9 -0.3 0.2];
+            d = a.affine(:, 1:2)*nodes' + a.affine(:, 3) - nodes' + bend;
+            warp = struct('affine', a.affine, 'nodes', nodes, 'sigma', 3, 'disp', d, 'patch', []);
         end
     end
 
@@ -129,7 +195,10 @@ classdef TestCompensatedExtraction < matlab.unittest.TestCase
             testCase.verifyEqual(double(aData.slap2.onlineCompensation.enabled), double(compensate));
         end
 
-        function [Y, Finv] = extract(testCase, aData, selPix)
+        function [Y, Finv] = extract(testCase, aData, selPix, warp)
+            if nargin < 4
+                warp = TestCompensatedExtraction.shiftWarp(); % one trial, no across-trial shift
+            end
             meanIM = permute(aData.meanIM, [2 3 1]); % alignment files store channels first; SILo's mean image is rows x cols x channels
             [r, c] = find(selPix);
             sources = struct('R', r, 'C', c, 'V', ones(size(r)));
@@ -145,7 +214,7 @@ classdef TestCompensatedExtraction < matlab.unittest.TestCase
             testCase.addTeardown(@() deleteIfExists(out));
             setappdata(0, 'FakeExtractTrialFile', out);
             processAllTrials_Async(testCase.DataDir, {testCase.Name}, 1, testCase.NumLines, selPix, sources, ...
-                {false}, {aData}, meanIM, zeros(2, 1), {}, 1, params);
+                {false}, {aData}, meanIM, warp, {}, 1, params);
             S = load(out);
             Y = S.Y_obs;
             Finv = S.Finv;

@@ -255,7 +255,9 @@ The final step of the pipeline, source extraction (Source Identification by Acti
        ├ 📈 onlineZshifts (total frames x 1)
        ├ 🔢 trial_num_frames (trials x 1)
        ├ 🔢 frame_line_idxs (total frames x 1)
-       └ ☑️ discard_frames (total frames x 1)
+       ├ ☑️ discard_frames (total frames x 1)
+       ├ 📈 trial_alignment_affine (trials x 2 x 3)
+       └ 📈 trial_alignment_displacement (trials x 2 x rows x cols; patchwise alignment only)
 ```
 
 A summary file of per-trial data is also saved as `per_trial_summary.h5` for any fields that may vary across analysis trials. The structure of that file is as follows
@@ -438,6 +440,8 @@ String fields are stored as UTF-16 code units (`uint16`) for robust MATLAB/Pytho
 | `Path{n}/frame_info/trial_num_frames` | trials x 1 | integer | Number of frames contributed by each analysis trial |
 | `Path{n}/frame_info/frame_line_idxs` | total frames x 1 | integer | Raw line (SLAP2) or frame (other microscopes) index for each frame in the stitched series. **1-indexed** to keep SLAP2 line indexing convention |
 | `Path{n}/frame_info/discard_frames` | total frames x 1 | bool or uint8 | Frame excluded from analysis (e.g., motion censoring) |
+| `Path{n}/frame_info/trial_alignment_affine` | trials x 2 x 3 | numeric | Per-trial affine map `A` from the common (across-trial aligned) frame to that trial's registered image, in **0-indexed** pixels: `[row; col]_trial = A(:, 1:2) * [row; col] + A(:, 3)`. A shift for `'rigid'` alignment; for `'patchwise'`, only the plane (affine) part of the map, whose full form is `trial_alignment_displacement`. NaN for trials that were not aligned. See [Aligning trials](#aligning-trials) |
+| `Path{n}/frame_info/trial_alignment_displacement` | trials x 2 x rows x cols | numeric | (`'patchwise'` alignment only) Per-trial map from the common frame to that trial's registered image as a displacement field: common-frame pixel `[row; col]` is read from the trial's image at `[row; col] + displacement(trial, :, row, col)` (the same in 0- and 1-indexed pixels). NaN for trials that were not aligned. See [Aligning trials](#aligning-trials) |
 | `Path{n}/visualizations` | — | group | Static images for QC and publication |
 | `Path{n}/visualizations/mean_im` | channels x fastz x rows x cols | numeric | Mean registered image per channel / Z slice |
 | `Path{n}/visualizations/act_im` | fastz x rows x cols | numeric | Activity / localization summary image (single contrast) |
@@ -473,7 +477,7 @@ String fields are stored as UTF-16 code units (`uint16`) for robust MATLAB/Pytho
 | `Path{n}/visualizations` | — | group | Per-trial static images for QC |
 | `Path{n}/visualizations/per_trial_mean_im` | trials x channels x fastz x rows x cols | numeric | Trial-aligned mean registered image per channel / Z slice |
 | `Path{n}/visualizations/per_trial_act_im` | trials x fastz x rows x cols | numeric | Trial-aligned activity / localization summary image |
-| `Path{n}/visualizations/per_trial_act_im_peaks` | trials x max_peaks x 3 | numeric | Per-trial detected peak locations `[z_loc, y_loc, x_loc]`, **0-indexed**, NaN-padded when a trial has fewer than `max_peaks`; from `exptSummary.peaks` with trial alignment offsets applied |
+| `Path{n}/visualizations/per_trial_act_im_peaks` | trials x max_peaks x 3 | numeric | Per-trial detected peak locations `[z_loc, y_loc, x_loc]`, **0-indexed**, NaN-padded when a trial has fewer than `max_peaks`; from `exptSummary.peaks`, mapped from each trial's registered image into the common frame (see [Aligning trials](#aligning-trials)) |
 | `Path{n}/visualizations/per_trial_num_peaks` | trials x 1 | integer | Number of valid peaks per trial; use to slice `per_trial_act_im_peaks` without scanning for NaNs |
 | `Path{n}/sources` | — | group | Per-trial SILo source data (when sources were extracted) |
 | `Path{n}/sources/spatial` | — | group | Per-trial spatial fingerprints and locations |
@@ -481,6 +485,24 @@ String fields are stored as UTF-16 code units (`uint16`) for robust MATLAB/Pytho
 | `Path{n}/sources/spatial/per_trial_coords` | trials x sources x 3 | numeric | Source centers per trial: `[z_loc, y_loc, x_loc]`, **0-indexed** (same convention as `experiment_summary.h5` `coords`) |
 | `Path{n}/sources/temporal` | — | group | Per-trial source metrics |
 | `Path{n}/sources/temporal/per_trial_SNR` | trials x sources | numeric | Per-source SNR for each analysis trial |
+
+#### Aligning trials
+
+Motion correction registers each trial's frames to that trial's own template, with one rigid shift per frame. SILo then brings all trials into one common frame before it finds and extracts sources. Each trial's mean image is first aligned to a consensus template with a rigid shift, and trials that align poorly are left out.
+
+Trial mean images also differ by small deformations that track motion: stretches of a few tenths of a pixel per 100 pixels (up to about a pixel at the edges of the field), and local bends of a few tenths of a pixel. A shift per trial leaves these in place. `params.interTrialAlignment` sets how the valid trials' alignment is refined:
+
+- **`'rigid'` (default)** keeps one shift per trial.
+- **`'affine'`** fits one affine map per trial.
+- **`'patchwise'`** fits each trial a smooth displacement field, set by its values at the centres of patches of imaged pixels.
+  - The patches are k-means clusters of the coordinates of the pixels imaged in at least half the trials, with about `params.alignPatchPx` (default 1500) imaged pixels each. Clusters with fewer than half that are merged into their neighbours. The default is large enough that no single spine dominates a patch, so the field can't stretch or shrink an individual spine.
+  - Between centres, the field is the plane (affine) fit through all the centre displacements, plus a Gaussian-weighted blend of each centre's departure from that plane. An affine deformation is reproduced exactly.
+  - All of a trial's centre displacements are fit jointly, with a gain and offset per patch and robust weights, so a spine changing brightness doesn't pull the field.
+  - Each trial's two halves (alternating 0.5 s blocks of frames) are also fit separately. Their disagreement gives the noise of each patch's departure from the plane, and departures are shrunk toward the plane by how far they stand above that noise.
+
+Both refinements are groupwise: the template is the mean of the trials warped into the common frame, each trial is refit to it, and the template is rebuilt, over a few rounds. The trials' mean deformation is removed, so the common frame keeps their average geometry. On a 780125 session (10 trials), the activity channel's leftover shifts, measured on held-out halves of the trials, were about 0.12 px after affine alignment and 0.08–0.09 px after patchwise alignment with 500 px patches.
+
+Everything per trial is then in the common frame: `per_trial_mean_im`, `per_trial_act_im`, the per-trial peaks, and the raw data that source extraction samples (each pixel is read at its trial's mapped position plus the frame's rigid motion). The maps are saved as `frame_info/trial_alignment_affine` and, for `'patchwise'`, `frame_info/trial_alignment_displacement`. With a refined alignment, `frame_info/offline{X,Y}shifts` add each trial's displacement at the image centre to the per-frame motion. User ROIs are mapped into the common frame through the full map of the trial they were annotated on (or, for post-acquisition annotations, registered to).
 
 ## Citation
 
