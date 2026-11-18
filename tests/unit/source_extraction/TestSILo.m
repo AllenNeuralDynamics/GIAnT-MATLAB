@@ -176,6 +176,85 @@ classdef TestSILo < matlab.unittest.TestCase
             end
         end
 
+        function testWmfSeedsFindSourcesAtActivityBlobs(testCase)
+            % peakMethod 'wmf' seeds from the trials' aligned activity images
+            % (it needs at least 4 trials)
+            testCase.NumTrials = 5;
+            testCase.Shifts = [0 0; 2 -1; -1 3; 1 1; -2 0];
+            testCase.writeDataset(1);
+
+            params = testCase.runSILo(testCase.Dr, struct('peakMethod', 'WMF'));
+
+            testCase.verifyEqual(params.peakMethod, 'wmf');
+            args = testCase.loadExtractorArgs();
+            src = [args.sources.R(:) args.sources.C(:)];
+            testCase.assertNotEmpty(src);
+            expected = testCase.expectedSourcePositions(args.motOutput);
+            dist = sqrt((src(:,1) - expected(:,1)').^2 + (src(:,2) - expected(:,2)').^2);
+            testCase.verifyLessThanOrEqual(min(dist, [], 1), 1.5*ones(1, size(expected, 1)), ...
+                'every blob should have a source');
+            testCase.verifyEqual(size(src, 1), size(expected, 1), 'one source per blob');
+            % seed values are the filtered image's z-scores, not getActImPeaks' amplitudes
+            testCase.deleteExtractorArgs();
+            testCase.runSILo(testCase.Dr);
+            argsDefault = testCase.loadExtractorArgs();
+            testCase.verifyNotEqual(sort(args.sources.V(:)), sort(argsDefault.sources.V(:)), 'seeded by findSourcesWMF');
+        end
+
+        function testWmfFallsBackBelowFourTrials(testCase)
+            % with 3 trials, peakMethod 'wmf' seeds as getActImPeaks does:
+            % the same positions and the same seed values
+            testCase.writeDataset(1);
+            testCase.runSILo(testCase.Dr);
+            expected = testCase.loadExtractorArgs().sources;
+            testCase.assertNotEmpty(expected.R);
+            testCase.deleteExtractorArgs();
+
+            testCase.runSILo(testCase.Dr, struct('peakMethod', 'wmf'));
+
+            args = testCase.loadExtractorArgs();
+            testCase.verifyEqual(args.sources, expected);
+        end
+
+        function testWmfSeedsWhereNoPixelIsInEveryTrial(testCase)
+            % each of 7 trials misses every seventh column of the scene, a
+            % different one per trial, so no pixel is imaged in all trials,
+            % but each is in at least 5 of the 7 (enough for nanThresh, even
+            % where sub-pixel alignment widens a missing column to two): the
+            % combined actIM is NaN everywhere and default seeding extracts
+            % nothing, while 'wmf' seeds and extracts every blob
+            testCase.NumTrials = 7;
+            testCase.Shifts = [0 0; 2 -1; -1 3; 1 1; -2 0; 0 2; 1 -2];
+            testCase.writeDataset(1);
+            for t = 1:testCase.NumTrials
+                fakeFn = fullfile(testCase.MocoDr, [testCase.regName(1, t) '.fake.mat']);
+                fake = load(fakeFn);
+                sceneCols = testCase.Margin + (1:testCase.CropSize) + testCase.Shifts(t, 2);
+                fake.actIM(:, mod(sceneCols, 7) == t - 1) = nan;
+                save(fakeFn, '-struct', 'fake');
+            end
+
+            testCase.runSILo(testCase.Dr);
+            testCase.verifyFalse(isfile(testCase.extractorArgsFile()), 'default seeding finds nothing to extract');
+
+            testCase.runSILo(testCase.Dr, struct('peakMethod', 'wmf'));
+
+            args = testCase.loadExtractorArgs();
+            src = [args.sources.R(:) args.sources.C(:)];
+            testCase.assertNotEmpty(src);
+            expected = testCase.expectedSourcePositions(args.motOutput);
+            dist = sqrt((src(:,1) - expected(:,1)').^2 + (src(:,2) - expected(:,2)').^2);
+            testCase.verifyLessThanOrEqual(min(dist, [], 1), 1.5*ones(1, size(expected, 1)), ...
+                'every blob should have a source');
+        end
+
+        function testRejectsUnknownPeakMethod(testCase)
+            testCase.writeDataset(1);
+
+            testCase.verifyError(@() testCase.runSILo(testCase.Dr, struct('peakMethod', 'gaussfit')), ...
+                'SILo:peakMethod');
+        end
+
         function testWritesSummariesAndTrialTable(testCase)
             testCase.writeDataset(1);
 
@@ -350,9 +429,20 @@ classdef TestSILo < matlab.unittest.TestCase
         end
 
         function args = loadExtractorArgs(testCase)
-            argsFn = fullfile(testCase.MocoDr, 'processAllTrials_Async_args.mat');
+            argsFn = testCase.extractorArgsFile();
             testCase.assertTrue(isfile(argsFn), 'processAllTrials_Async was not called.');
             args = load(argsFn);
+        end
+
+        function fn = extractorArgsFile(testCase)
+            % where the fake processAllTrials_Async saves its arguments
+            fn = fullfile(testCase.MocoDr, 'processAllTrials_Async_args.mat');
+        end
+
+        function deleteExtractorArgs(testCase)
+            % before running SILo again, so that a run that extracts nothing
+            % cannot be read as the previous run's arguments
+            if isfile(testCase.extractorArgsFile()), delete(testCase.extractorArgsFile()); end
         end
 
         function pos = expectedSourcePositions(testCase, motOutput)
