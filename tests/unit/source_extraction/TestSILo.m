@@ -217,19 +217,20 @@ classdef TestSILo < matlab.unittest.TestCase
         end
 
         function testWmfSeedsWhereNoPixelIsInEveryTrial(testCase)
-            % each of 5 trials misses every fifth column of the scene, a
-            % different one per trial, so every pixel is imaged in 4 of the 5
-            % trials (enough for nanThresh) but none in all of them: the
+            % each of 7 trials misses every seventh column of the scene, a
+            % different one per trial, so no pixel is imaged in all trials,
+            % but each is in at least 5 of the 7 (enough for nanThresh, even
+            % where sub-pixel alignment widens a missing column to two): the
             % combined actIM is NaN everywhere and default seeding extracts
             % nothing, while 'wmf' seeds and extracts every blob
-            testCase.NumTrials = 5;
-            testCase.Shifts = [0 0; 2 -1; -1 3; 1 1; -2 0];
+            testCase.NumTrials = 7;
+            testCase.Shifts = [0 0; 2 -1; -1 3; 1 1; -2 0; 0 2; 1 -2];
             testCase.writeDataset(1);
             for t = 1:testCase.NumTrials
                 fakeFn = fullfile(testCase.MocoDr, [testCase.regName(1, t) '.fake.mat']);
                 fake = load(fakeFn);
                 sceneCols = testCase.Margin + (1:testCase.CropSize) + testCase.Shifts(t, 2);
-                fake.actIM(:, mod(sceneCols, 5) == t - 1) = nan;
+                fake.actIM(:, mod(sceneCols, 7) == t - 1) = nan;
                 save(fakeFn, '-struct', 'fake');
             end
 
