@@ -508,7 +508,7 @@ Everything per trial is then in the common frame: `per_trial_mean_im`, `per_tria
 
 `params.peakMethod` sets how SILo seeds sources before extracting them.
 
-- **`'getActImPeaks'` (default)** takes the maxima of `act_im` (the mean of the valid trials' aligned activity images, minus a local median) above `params.peakth` (robust z). It fits them jointly with Gaussians, adds peaks where the residual still exceeds the threshold, and drops fitted peaks that are too small. Because the fit adds a peak wherever a blob is not Gaussian, it can split one elongated or large source into seeds at its edges, with none at its centre.
+- **`'getActImPeaks'` (default)** takes the maxima of `act_im` (the mean of the valid trials' aligned activity images, minus a local median) above `params.peakth` (robust z; default 3 for SLAP2, 8 otherwise). It fits them jointly with Gaussians, adds peaks where the residual still exceeds the threshold, and drops fitted peaks that are too small. Because the fit adds a peak wherever a blob is not Gaussian, it can split one elongated or large source into seeds at its edges, with none at its centre.
 - **`'wmf'`** (`findSourcesWMF`) works from the trials' aligned activity images (`per_trial_act_im`). It needs at least 4 trials; with fewer, SILo seeds with `'getActImPeaks'`.
   1. Each trial's image, minus its local median, is z-scored, and the trials' mean is z-scored again.
   2. This combined image goes through a whitened matched filter: the detection statistic for a source of the empirical shape in noise of the empirical autocorrelation.
@@ -518,17 +518,23 @@ Everything per trial is then in the common frame: `per_trial_mean_im`, `per_tria
   4. Deblending fits the combined image with one copy of the source shape per seed, each with its own amplitude and subpixel position. Where the filtered residual near a seed still peaks above `params.wmfDeblendth`, and above `params.wmfDeblendth`/√2 in each half of the trials, a seed is added and the fit repeated. This separates sources too close together to show a dip. A source much longer than the others can also get a second seed along it.
   5. Each seed sits at its fitted position, and must be active in at least 2 trials.
 
-  `params.wmfDeblendth` (default 8) is set apart from `params.wmfPeakth` (default 5):
+  `params.wmfDeblendth` (default 8) is set apart from `params.wmfPeakth` (default 3 for SLAP2, 5 otherwise):
   - At 5, deblending added 53 and 66 seeds on the session below, against 17 and 11 at 8. On one path, half of the close pairs it left were brighter between the two seeds than at them in held-out trials, as they would be if one source were split in two (24% for `'getActImPeaks'`).
   - Deblending at 8 doesn't depend on the detection threshold. In windows of 7 trials, with `params.wmfPeakth` at 3, 4 or 5, it added 8–13 seeds per window and left 2–3 close pairs, and the share of seeds that reproduced in the held-out trials didn't change.
 
-On a 39-trial SLAP2 session with two imaging paths:
+On a 39-trial SLAP2 session with two imaging paths (at the earlier thresholds, `params.peakth` 8 and `params.wmfPeakth` 5):
 
 - **Fewer near-duplicate seeds.** `'wmf'` left 16 and 10 seeds with another seed closer than 3 px, against 59 and 43 for `'getActImPeaks'`.
 - **More reproducible seeds.** In cross-validation over halves of the trials (10 splits), more of the seeds found on one half were found again on the other: 145 vs 106 and 148 vs 85 per path.
 - **Better centred.** Seeds sat closer to the other half's activity peaks: 0.26–0.34 px vs 0.40–0.42 px.
 - **More seeds overall:** 194 and 184 vs 150 and 134, so the overall agreement between halves (Dice) is similar, 0.80–0.82 vs 0.77–0.82.
 - **Few trials.** In windows of 7 trials, `'wmf'` found 164 and 173 seeds per window, against 99 and 84. Of these, 91% and 99% were present in the other 32 trials more often than 99% of background locations, against 98% and 100%.
+
+**Peak thresholds.** Left empty, `params.peakth` and `params.wmfPeakth` are both 3 for SLAP2 data, and 8 and 5 for other recordings. The SLAP2 values come from 4 sessions trimmed to 180 s (7–10 trials, 2 paths each) ([#42](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB/issues/42)). Flipping the sign of each trial's deviation from the trials' mean at random keeps the noise of the mean but removes what is consistent across trials. So the maxima of such images, away from real sources, estimate how many seeds noise alone gives at each threshold.
+- **`'getActImPeaks'`:** at 3, the estimated false-discovery rate was at most 10% on all 8 paths. 8 is about 9–12 noise SDs here, and gave 5–31 sources per path on 3 of the 4 sessions. On 2 sessions, 3 gave 3–9 times as many sources as 8, at least 75% of them with SNR above 5. Near 3, 6–46% of seeds have another seed within 3 px.
+- **`'wmf'`:** at 3, the rate was at most 2.8% on all 8 paths, with online-motion compensation or without it, through WMF's own filter and per-trial activity test. 3 gave 1.2–2 times as many seeds as 5, and at most 6% of them had another seed within 3 px. Below 3, seeds increased only 2–6% while the rate doubled.
+
+Neither estimate sees artifacts that repeat in every trial. Non-SLAP2 recordings were not tested.
 
 ## Citation
 
