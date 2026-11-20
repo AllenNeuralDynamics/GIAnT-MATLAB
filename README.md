@@ -231,7 +231,13 @@ The final step of the pipeline, source extraction (Source Identification by Acti
     |  |  ├ 📈 dF_denoised (sources x channels x total frames)
     |  |  ├ 📈 events (sources x channels x total frames)
     |  |  ├ 📈 F0 (sources x channels x total frames)
-    |  |  └ 📈 SNR (sources x 1)
+    |  |  ├ 📈 SNR (sources x 1)
+    |  |  ├ 📈 kinetic_score (sources x 1)
+    |  |  └ 🔢 kinetic_n_events (sources x 1)
+    |  ├ 📁 rejected (sources removed by the kinetics test, when any)
+    |  |  ├ 📈 seed_coords (removed x 3 [z_loc, y_loc, x_loc])
+    |  |  ├ 📈 kinetic_score (removed x 1)
+    |  |  └ 🔢 kinetic_n_events (removed x 1)
     |  └ 📁 spatial
     |     ├ 🖼️ profiles (sources x fastz x rows x cols)
     |     └ 📈 coords (sources x 3 [z_loc, y_loc, x_loc])
@@ -463,6 +469,12 @@ String fields are stored as UTF-16 code units (`uint16`) for robust MATLAB/Pytho
 | `Path{n}/sources/temporal/events` | sources x channels x total frames | numeric | Deconvolved source events |
 | `Path{n}/sources/temporal/F0` | sources x channels x total frames | numeric | Baseline estimate used for normalization |
 | `Path{n}/sources/temporal/SNR` | sources x 1 | numeric | (optional) Signal-to-noise ratio metric; only written when extraction emits per-source SNR |
+| `Path{n}/sources/temporal/kinetic_score` | sources x 1 | numeric | Transient kinetics of each source (`sourceKinetics`): its strongest transients' average one decay time constant (`params.tau_s`) after the peak, relative to the peak, divided by the indicator's exp(−1). About 1 for the indicator's kinetics, about 0 for one-frame transients; NaN with fewer than 5 transients, or when the frame rate does not resolve `params.tau_s`. See [Source kinetics](#seeding-sources) |
+| `Path{n}/sources/temporal/kinetic_n_events` | sources x 1 | integer | Number of transients averaged for `kinetic_score` |
+| `Path{n}/sources/rejected` | — | group | Sources removed because `kinetic_score` was below `params.minKineticScore`; written only when any were removed. They were fitted together with the saved sources, so the saved sources' traces are those of the joint fit |
+| `Path{n}/sources/rejected/seed_coords` | removed x 3 | numeric | Seed positions `[z_loc, y_loc, x_loc]`, **0-indexed**, as `visualizations/act_im_peaks` |
+| `Path{n}/sources/rejected/kinetic_score` | removed x 1 | numeric | Their `kinetic_score` |
+| `Path{n}/sources/rejected/kinetic_n_events` | removed x 1 | integer | Their `kinetic_n_events` |
 
 ### `per_trial_summary.h5`
 
@@ -534,7 +546,20 @@ On a 39-trial SLAP2 session with two imaging paths (at the earlier thresholds, `
 - **`'getActImPeaks'`:** at 3, the estimated false-discovery rate was at most 10% on all 8 paths. 8 is about 9–12 noise SDs here, and gave 5–31 sources per path on 3 of the 4 sessions. On 2 sessions, 3 gave 3–9 times as many sources as 8, at least 75% of them with SNR above 5. Near 3, 6–46% of seeds have another seed within 3 px.
 - **`'wmf'`:** at 3, the rate was at most 2.8% on all 8 paths, with online-motion compensation or without it, through WMF's own filter and per-trial activity test. 3 gave 1.2–2 times as many seeds as 5, and at most 6% of them had another seed within 3 px. Below 3, seeds increased only 2–6% while the rate doubled.
 
-Neither estimate sees artifacts that repeat in every trial. Non-SLAP2 recordings were not tested.
+Neither estimate sees artifacts that repeat in every trial, and at these thresholds many SLAP2 sources are of that kind (see Source kinetics). Non-SLAP2 recordings were not tested.
+
+**Source kinetics.** On SLAP2 data, many sources seeded near 3 are not glutamate signals. On one session (780125, 180 s, 7 trials), sources near the soma and in ROIs without large activity-image peaks had transients that decayed much faster than iGluSnFR4f allows. Averaged over each source's strongest transients, 1–10% of the peak remained 25 ms later, against about 35% expected from the indicator's 24 ms decay and 28–34% in ROIs with strong activity. These sources were about 5 times dimmer, and their transients were not tied to motion, to online offset switches, to the trial timing or to each other within an ROI. Simulated Gaussian or Poisson noise gives almost none of them. The activity image cannot reject them, because it is computed at `alignHz` (80 Hz), where the decay spans less than two frames, and a source's seed z-score does not separate them from sources with the indicator's kinetics: at a seed threshold of 8, 66% of one path's suspect sources would remain.
+
+After extraction, `sourceKinetics` therefore scores each source's kinetics from its least-squares trace at `analyzeHz` (`sources/temporal/kinetic_score`), and sources below `params.minKineticScore` are removed (default 0.4 for SLAP2, 0, keeping every source, for other recordings). Sources with fewer than 5 transients cannot be scored and are kept. On that session the scores fell into two groups, near 0 and near 1:
+
+| seeding | removed, Path1 | removed, Path2 |
+|---|---|---|
+| `'getActImPeaks'`, `params.peakth` 8 | 1 of 106 | 16 of 74 |
+| `'getActImPeaks'`, `params.peakth` 3 | 90 of 326 | 218 of 353 |
+| `'wmf'`, `params.wmfPeakth` 5 | 28 of 137 | 84 of 159 |
+| `'wmf'`, `params.wmfPeakth` 3 | 95 of 236 | 125 of 219 |
+
+The test kept 76–98% of the sources in ROIs with strong activity and 20–41% of those in the others. At 3, `'getActImPeaks'` kept 236 and 135 sources, against 105 and 58 at 8. Weak sources are scored with less certainty: in simulations of transients with the indicator's kinetics at 1 Hz in Poisson noise, the median score was 0.54 and 21% scored below 0.4. The test has not been validated on non-SLAP2 recordings. Building the kinetics into the activity image itself is planned for GIAnT-Python ([#49](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB/issues/49)).
 
 ## Citation
 

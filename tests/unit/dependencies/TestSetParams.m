@@ -1,8 +1,9 @@
 classdef TestSetParams < matlab.unittest.TestCase
     %TESTSETPARAMS Unit tests for setParams' modality-dependent defaults.
-    %   SILo's peak thresholds (peakth, wmfPeakth) default to empty, and
-    %   setParams fills them for the recording's modality: 3 and 3 for SLAP2,
-    %   8 and 5 otherwise. Values the caller sets are kept.
+    %   SILo's peak thresholds (peakth, wmfPeakth) and kinetics cutoff
+    %   (minKineticScore) default to empty, and setParams fills them for the
+    %   recording's modality: 3, 3 and 0.4 for SLAP2, 8, 5 and 0 otherwise.
+    %   Values the caller sets are kept.
     %   Run with: runtests('tests/unit/dependencies/TestSetParams.m')
 
     methods (TestClassSetup)
@@ -19,12 +20,14 @@ classdef TestSetParams < matlab.unittest.TestCase
             p = setParams('SILo', struct('isSLAP2', false));
             testCase.verifyEqual(p.peakth, 8);
             testCase.verifyEqual(p.wmfPeakth, 5);
+            testCase.verifyEqual(p.minKineticScore, 0);
         end
 
         function testSlap2Defaults(testCase)
             p = setParams('SILo', struct('isSLAP2', true));
             testCase.verifyEqual(p.peakth, 3);
             testCase.verifyEqual(p.wmfPeakth, 3);
+            testCase.verifyEqual(p.minKineticScore, 0.4);
         end
 
         function testLegacyMicroscopeField(testCase)
@@ -63,6 +66,14 @@ classdef TestSetParams < matlab.unittest.TestCase
             p = setParams('MultiRoiRegistration', struct('nWorkers', 1));
             testCase.verifyFalse(isfield(p, 'peakth'));
             testCase.verifyFalse(isfield(p, 'wmfPeakth'));
+            testCase.verifyFalse(isfield(p, 'minKineticScore'));
+        end
+
+        function testKineticCutoffKept(testCase)
+            p = setParams('SILo', struct('isSLAP2', true, 'minKineticScore', 0));
+            testCase.verifyEqual(p.minKineticScore, 0);
+            p = setParams('SILo', jsondecode('{"isSLAP2":true,"minKineticScore":null}'));
+            testCase.verifyEqual(p.minKineticScore, 0.4);
         end
     end
 end
