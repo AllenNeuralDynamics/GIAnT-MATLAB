@@ -12,17 +12,25 @@ function [score, nEvents] = sourceKinetics(E, params)
 %   indicator's kinetics give about 1; transients much faster than the
 %   indicator (one or two frames) give about 0.
 %
-%   Each trial's trace is high-passed (1 s moving mean) and filtered with the
-%   indicator's decay (an anti-causal exponential, the matched filter for a
-%   step rise and exponential decay). Events are maxima of the filtered trace
-%   above 5 robust SDs (median absolute deviation over all trials) and at
-%   least 2 tau apart, each aligned on the largest high-passed sample within
-%   0.6 tau of the maximum. Frames that are NaN (discarded) count as 0 in
-%   the filtering, and events whose peak or decay frame was discarded are
-%   skipped.
+%   Each trial's trace is high-passed (moving mean over 1 s or 10 tau,
+%   whichever is longer, so that slow transients are not removed with the
+%   baseline) and filtered with the indicator's decay (an anti-causal
+%   exponential, the matched filter for a step rise and exponential decay).
+%   Events are maxima of the filtered trace above 5 robust SDs (median
+%   absolute deviation over all trials) and at least 2 tau apart, each
+%   aligned on the largest high-passed sample within 0.6 tau, and at most 3
+%   frames, of the maximum (a wider window picks up noise maxima when tau is
+%   long). Frames that are NaN (discarded) count as 0 in the filtering, and
+%   events whose peak or decay frame was discarded are skipped.
 %
 %   SCORE is NaN for sources with fewer than 5 events, and for every source
-%   when the decay spans fewer than 2 frames (the kinetics are not resolved).
+%   when one decay time constant rounds to fewer than 3 frames. SLAP2 traces
+%   are smoothed over about 4 frames, so one-frame transients still extend 2
+%   frames past their peak and cannot be told apart from the indicator.
+%   Because events are detected with the indicator's decay, one-frame
+%   transients are detected less well as tau grows (roughly as
+%   1/sqrt(tau)), and at long tau sources with only fast transients may
+%   have too few events to be scored.
 %   NEVENTS is the number of events averaged for each source.
 
 if ~iscell(E)
@@ -38,16 +46,16 @@ end
 score = nan(nSources, 1);
 nEvents = zeros(nSources, 1);
 tauF = params.tau_s * params.analyzeHz;
-if nSources == 0 || tauF < 2
+L = round(tauF);                  %lag at which the decay is compared
+if nSources == 0 || L < 3
     return
 end
 
 thresh = 5;                       %event threshold, robust SDs of the filtered trace
 minEvents = 5;
-L = round(tauF);                  %lag at which the decay is compared
 sep = max(1, round(2 * tauF));    %minimum frames between events
-w = max(1, round(0.6 * tauF));    %alignment window, frames either side
-hpWin = max(3, round(params.analyzeHz)); %high-pass window, frames (1 s)
+w = min(3, max(1, round(0.6 * tauF))); %alignment window, frames either side
+hpWin = max(3, round(max(params.analyzeHz, 10 * tauF))); %high-pass window, frames (1 s or 10 tau)
 a = exp(-1 / tauF);
 
 %high-pass and filter each trial

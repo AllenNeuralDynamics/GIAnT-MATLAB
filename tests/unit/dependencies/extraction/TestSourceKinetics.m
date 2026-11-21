@@ -88,6 +88,38 @@ classdef TestSourceKinetics < matlab.unittest.TestCase
             testCase.verifyEqual(nEvents, zeros(3, 1));
         end
 
+        function testTwoFrameDecayGivesNaN(testCase)
+            % SLAP2 traces are smoothed over about 4 frames, so a decay of 2
+            % frames (10 ms at 200 Hz) does not separate one-frame
+            % transients from the indicator: no source is scored
+            E = testCase.makeTrials();
+            p = testCase.params();
+            p.tau_s = 2 / p.analyzeHz;
+            [score, nEvents] = sourceKinetics(E, p);
+            testCase.verifyTrue(all(isnan(score)));
+            testCase.verifyEqual(nEvents, zeros(3, 1));
+        end
+
+        function testScoresAcrossDecayConstants(testCase)
+            % From 3 frames to slow indicators: the high-pass window grows
+            % with tau and the alignment window is capped, so transients
+            % with the indicator's decay stay well above the SLAP2 cutoff
+            % and one-frame transients near 0. At long tau the indicator
+            % scores below 1 (about 0.7 here): the high-pass window still
+            % holds part of each transient, and the peak sample carries noise
+            for tau_s = [0.015 0.1 0.5]
+                p = testCase.params();
+                p.tau_s = tau_s;
+                score = sourceKinetics(testCase.makeSpacedTrials(tau_s), p);
+                testCase.verifyGreaterThan(score(1), 0.5, ...
+                    sprintf('indicator, tau_s %g s', tau_s));
+                testCase.verifyLessThan(score(1), 1.25, ...
+                    sprintf('indicator, tau_s %g s', tau_s));
+                testCase.verifyEqual(score(2), 0, 'AbsTol', 0.15, ...
+                    sprintf('one frame, tau_s %g s', tau_s));
+            end
+        end
+
         function testNoTracesGiveEmptyScores(testCase)
             [score, nEvents] = sourceKinetics({[], struct('SNR', 1)}, testCase.params());
             testCase.verifyEmpty(score);
@@ -169,6 +201,30 @@ classdef TestSourceKinetics < matlab.unittest.TestCase
                     'dF', struct('ls', ls, 'denoised', ls + 1, 'events', ls + 2), ...
                     'F0', 10 + ls, ...
                     'SNR', [5; 6; 7]);
+            end
+        end
+
+        function E = makeSpacedTrials(testCase, tau_s)
+            % an indicator source (amplitude 10, decaying with tau_s) and a
+            % one-frame source (amplitude 100, large enough for the event
+            % filter at long tau) in unit Gaussian noise, with transients
+            % about 20 tau apart (as in makeTrials)
+            rs = RandStream('twister', 'Seed', 5);
+            tauF = tau_s * testCase.Fs;
+            k = exp(-(0:ceil(10 * tauF)) / tauF);
+            gap = max(20, round(20 * tauF));
+            T = max(testCase.NumFrames, 10 * gap);
+            on = gap:gap:T-gap;
+            jit = round(gap / 10);
+            E = cell(testCase.NumTrials, 1);
+            for t = 1:testCase.NumTrials
+                ls = randn(rs, 2, T);
+                ev = zeros(1, T);
+                ev(on + randi(rs, [-jit jit], size(on))) = 1;
+                tr = conv(10 * ev, k);
+                ls(1, :) = ls(1, :) + tr(1:T);
+                ls(2, :) = ls(2, :) + 100 * ev;
+                E{t} = struct('dF', struct('ls', ls));
             end
         end
     end
