@@ -17,7 +17,9 @@ function [score, nEvents] = sourceKinetics(E, params)
 %   step rise and exponential decay). Events are maxima of the filtered trace
 %   above 5 robust SDs (median absolute deviation over all trials) and at
 %   least 2 tau apart, each aligned on the largest high-passed sample within
-%   0.6 tau of the maximum. Frames that are NaN (discarded) count as 0.
+%   0.6 tau of the maximum. Frames that are NaN (discarded) count as 0 in
+%   the filtering, and events whose peak or decay frame was discarded are
+%   skipped.
 %
 %   SCORE is NaN for sources with fewer than 5 events, and for every source
 %   when the decay spans fewer than 2 frames (the kinetics are not resolved).
@@ -89,7 +91,7 @@ for k = 1:numel(Y)
             end
             [~, j] = max(x(s, lo:hi));
             q = lo + j - 1;
-            if q + L > T
+            if q + L > T || ~valid(s, q) || ~valid(s, q + L)
                 continue
             end
             sum0(s) = sum0(s) + x(s, q);

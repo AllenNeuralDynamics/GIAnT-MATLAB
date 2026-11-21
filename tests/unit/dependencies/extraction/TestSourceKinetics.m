@@ -48,6 +48,36 @@ classdef TestSourceKinetics < matlab.unittest.TestCase
             testCase.verifyEqual(score(2), 0, 'AbsTol', 0.25);
         end
 
+        function testSkipsEventsWithDiscardedDecayFrame(testCase)
+            % An indicator-like source whose decay frame (one tau after the
+            % peak) is discarded in every other event: those events are
+            % skipped rather than counted as having decayed to 0.
+            p = testCase.params();
+            tauF = p.tau_s * p.analyzeHz;
+            L = round(tauF);
+            T = testCase.NumFrames;
+            rs = RandStream('twister', 'Seed', 11);
+            k = exp(-(0:ceil(10 * tauF)) / tauF);
+            on = 50:100:T-50;
+            E = cell(testCase.NumTrials, 1);
+            for t = 1:testCase.NumTrials
+                ev = zeros(1, T);
+                ev(on) = 10;
+                tr = conv(ev, k);
+                x = randn(rs, 1, T) + tr(1:T);
+                % discard the frames around the decay sample, so that it
+                % is discarded even when noise moves the aligned peak
+                gone = on(1:2:end)' + (L-1:L+2);
+                x(gone(:)) = nan;
+                E{t} = struct('dF', struct('ls', x));
+            end
+            [score, nEvents] = sourceKinetics(E, p);
+            testCase.verifyEqual(score, 1, 'AbsTol', 0.25);
+            nKept = testCase.NumTrials * (numel(on) - numel(1:2:numel(on)));
+            testCase.verifyLessThanOrEqual(nEvents, nKept);
+            testCase.verifyGreaterThanOrEqual(nEvents, nKept - 3);
+        end
+
         function testUnresolvedKineticsGiveNaN(testCase)
             % at 20 Hz the 24 ms decay is under one frame
             E = testCase.makeTrials();

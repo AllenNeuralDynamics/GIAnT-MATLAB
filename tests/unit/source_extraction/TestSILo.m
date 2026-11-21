@@ -315,6 +315,25 @@ classdef TestSILo < matlab.unittest.TestCase
             testCase.verifyLessThan(double(src.rejected.kinetic_score), 0.4);
         end
 
+        function testKineticsTestRecordsSourcesWhenAllAreRemoved(testCase)
+            % A cutoff above every score removes every source; the summary
+            % still records where they were.
+            testCase.NumFrames = 200;
+            testCase.writeDataset(1);
+
+            testCase.runSILo(testCase.Dr, struct('tau_s', 0.15, 'minKineticScore', 2));
+
+            args = testCase.loadExtractorArgs();
+            nSeeds = numel(args.sources.R);
+            testCase.assertGreaterThan(nSeeds, 1);
+            es = loadStructFromH5(fullfile(testCase.SaveDr, 'source_extraction', 'experiment_summary.h5'));
+            src = es.Path1.sources;
+            testCase.verifyFalse(isfield(src, 'temporal'));
+            testCase.verifyEqual(double(src.rejected.seed_coords), ...
+                [zeros(nSeeds,1) args.sources.R(:)-1 args.sources.C(:)-1]);
+            testCase.verifyNumElements(src.rejected.kinetic_score, nSeeds);
+        end
+
         function testRejectsNegativeKineticCutoff(testCase)
             testCase.writeDataset(1);
             testCase.verifyError(@() testCase.runSILo(testCase.Dr, struct('minKineticScore', -1)), ...

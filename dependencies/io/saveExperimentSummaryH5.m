@@ -361,6 +361,22 @@ function src = buildSources(exptSummary, DMDix, framesPerTrial, totalFrames, ...
     nTrials, selPix, numChannels, orderedChannels)
 src = struct();
 
+% transient kinetics (rejectFastSources): the seed positions and scores of
+% the sources it removed, written before the early returns below so they
+% are kept when every source on the path was removed
+kin = [];
+if isfield(exptSummary, 'sourceKinetics') && numel(exptSummary.sourceKinetics) >= DMDix
+    kin = exptSummary.sourceKinetics{DMDix};
+end
+if ~isempty(kin) && ~isempty(kin.rejected.R)
+    nRejected = numel(kin.rejected.R);
+    % 0-indexed [z_loc, y_loc, x_loc], as visualizations/act_im_peaks
+    src.rejected = struct( ...
+        'seed_coords', [zeros(nRejected, 1), double(kin.rejected.R(:)) - 1, double(kin.rejected.C(:)) - 1], ...
+        'kinetic_score', double(kin.rejected.score(:)), ...
+        'kinetic_n_events', int32(kin.rejected.nEvents(:)));
+end
+
 % Find first valid trial to grab spatial footprints and shape info
 firstValid = 0;
 E0 = [];
@@ -478,24 +494,11 @@ end
 if any(~isnan(snrAcrossTrials), 'all')
     temp.SNR = mean(snrAcrossTrials, 2, 'omitnan');
 end
-% transient kinetics (rejectFastSources): scores of the saved sources, and
-% the seed positions and scores of the sources it removed
-kin = [];
-if isfield(exptSummary, 'sourceKinetics') && numel(exptSummary.sourceKinetics) >= DMDix
-    kin = exptSummary.sourceKinetics{DMDix};
-end
+% transient kinetics (rejectFastSources) of the saved sources
 if ~isempty(kin) && numel(kin.score) == nSources
     temp.kinetic_score = double(kin.score(:));
     temp.kinetic_n_events = int32(kin.nEvents(:));
 end
 src.temporal = temp;
-if ~isempty(kin) && ~isempty(kin.rejected.R)
-    nRejected = numel(kin.rejected.R);
-    % 0-indexed [z_loc, y_loc, x_loc], as visualizations/act_im_peaks
-    src.rejected = struct( ...
-        'seed_coords', [zeros(nRejected, 1), double(kin.rejected.R(:)) - 1, double(kin.rejected.C(:)) - 1], ...
-        'kinetic_score', double(kin.rejected.score(:)), ...
-        'kinetic_n_events', int32(kin.rejected.nEvents(:)));
-end
 end
 

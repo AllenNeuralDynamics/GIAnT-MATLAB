@@ -471,7 +471,7 @@ String fields are stored as UTF-16 code units (`uint16`) for robust MATLAB/Pytho
 | `Path{n}/sources/temporal/SNR` | sources x 1 | numeric | (optional) Signal-to-noise ratio metric; only written when extraction emits per-source SNR |
 | `Path{n}/sources/temporal/kinetic_score` | sources x 1 | numeric | Transient kinetics of each source (`sourceKinetics`): its strongest transients' average one decay time constant (`params.tau_s`) after the peak, relative to the peak, divided by the indicator's exp(−1). About 1 for the indicator's kinetics, about 0 for one-frame transients; NaN with fewer than 5 transients, or when the frame rate does not resolve `params.tau_s`. See [Source kinetics](#seeding-sources) |
 | `Path{n}/sources/temporal/kinetic_n_events` | sources x 1 | integer | Number of transients averaged for `kinetic_score` |
-| `Path{n}/sources/rejected` | — | group | Sources removed because `kinetic_score` was below `params.minKineticScore`; written only when any were removed. They were fitted together with the saved sources, so the saved sources' traces are those of the joint fit |
+| `Path{n}/sources/rejected` | — | group | Sources removed because `kinetic_score` was below `params.minKineticScore`; written only when any were removed, and the only group under `sources` when all were. They were fitted together with the saved sources, so the saved sources' traces are those of the joint fit |
 | `Path{n}/sources/rejected/seed_coords` | removed x 3 | numeric | Seed positions `[z_loc, y_loc, x_loc]`, **0-indexed**, as `visualizations/act_im_peaks` |
 | `Path{n}/sources/rejected/kinetic_score` | removed x 1 | numeric | Their `kinetic_score` |
 | `Path{n}/sources/rejected/kinetic_n_events` | removed x 1 | integer | Their `kinetic_n_events` |
@@ -555,11 +555,11 @@ After extraction, `sourceKinetics` therefore scores each source's kinetics from 
 | seeding | removed, Path1 | removed, Path2 |
 |---|---|---|
 | `'getActImPeaks'`, `params.peakth` 8 | 0 of 106 | 15 of 74 |
-| `'getActImPeaks'`, `params.peakth` 3 | 58 of 326 | 182 of 353 |
-| `'wmf'`, `params.wmfPeakth` 5 | 25 of 137 | 78 of 159 |
+| `'getActImPeaks'`, `params.peakth` 3 | 57 of 326 | 182 of 353 |
+| `'wmf'`, `params.wmfPeakth` 5 | 24 of 137 | 78 of 159 |
 | `'wmf'`, `params.wmfPeakth` 3 | 77 of 236 | 108 of 219 |
 
-At thresholds of 3, the test kept 87–100% of the sources in ROIs with strong activity and 31–61% of those in the others. At 3, `'getActImPeaks'` kept 268 and 171 sources, against 106 and 59 at 8. On three other sessions it removed 0–7 sources per path (of 33–83). On two of them the scores did not fall into groups: sources whose transients were mostly fast lay along the same dendrites as sources with the indicator's kinetics, and a cutoff of 0.4 would have removed 9–27% of each path's sources, some of which carried indicator-like transients as well. Below 0.2, almost all of a source's transients are fast. Weak sources are scored with less certainty: in simulations of transients with the indicator's kinetics at 1 Hz in Poisson noise, the median score was 0.57, and 0.3% scored below 0.2 (14% below 0.4). The test has not been validated on non-SLAP2 recordings. Building the kinetics into the activity image itself is planned for GIAnT-Python ([#49](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB/issues/49)).
+At thresholds of 3, the test kept 87–100% of the sources in ROIs with strong activity and 31–61% of those in the others. At 3, `'getActImPeaks'` kept 269 and 171 sources, against 106 and 59 at 8. On three other sessions it removed 0–7 sources per path (of 33–83). On two of them the scores did not fall into groups: sources whose transients were mostly fast lay along the same dendrites as sources with the indicator's kinetics, and a cutoff of 0.4 would have removed 9–27% of each path's sources, some of which carried indicator-like transients as well. Below 0.2, almost all of a source's transients are fast. Weak sources are scored with less certainty: in simulations of transients with the indicator's kinetics at 1 Hz in Poisson noise, the median score was 0.57, and 0.3% scored below 0.2 (14% below 0.4). The test has not been validated on non-SLAP2 recordings. Building the kinetics into the activity image itself is planned for GIAnT-Python ([#49](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB/issues/49)).
 
 ## Citation
 
