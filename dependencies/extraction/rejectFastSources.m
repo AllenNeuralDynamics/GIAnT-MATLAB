@@ -6,8 +6,8 @@ function [E, sources, kinetics] = rejectFastSources(E, sources, params)
 %   is above 0, sources scoring below it are removed from every trial's
 %   extraction results in the cell array E (footprints, dF.ls, dF.denoised,
 %   dF.events, F0, SNR) and from SOURCES (R, C, V). Sources that cannot be
-%   scored (NaN: fewer than 5 transients, or a frame rate that does not
-%   resolve tau_s) are kept. The removed sources were fitted together with
+%   scored (NaN: fewer than 5 transients, or tau_s under 3 frames at
+%   analyzeHz) are kept. The removed sources were fitted together with
 %   the kept ones, so the kept sources' traces are those of the joint fit.
 %
 %   KINETICS has fields score and nEvents for the kept sources, and
