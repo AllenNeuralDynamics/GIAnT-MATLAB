@@ -550,16 +550,16 @@ Neither estimate sees artifacts that repeat in every trial, and at these thresho
 
 **Source kinetics.** On SLAP2 data, many sources seeded near 3 are not glutamate signals. On one session (780125, 180 s, 7 trials), sources near the soma and in ROIs without large activity-image peaks had transients that decayed much faster than iGluSnFR4f allows. Averaged over each source's strongest transients, 1–10% of the peak remained 25 ms later, against about 35% expected from the indicator's 24 ms decay and 28–34% in ROIs with strong activity. These sources were about 5 times dimmer, and their transients were not tied to motion, to online offset switches, to the trial timing or to each other within an ROI. Simulated Gaussian or Poisson noise gives almost none of them. The activity image cannot reject them, because it is computed at `alignHz` (80 Hz), where the decay spans less than two frames, and a source's seed z-score does not separate them from sources with the indicator's kinetics: at a seed threshold of 8, 66% of one path's suspect sources would remain.
 
-After extraction, `sourceKinetics` therefore scores each source's kinetics from its least-squares trace at `analyzeHz` (`sources/temporal/kinetic_score`), and sources below `params.minKineticScore` are removed (default 0.4 for SLAP2, 0, keeping every source, for other recordings). Sources with fewer than 5 transients cannot be scored and are kept. On that session the scores fell into two groups, near 0 and near 1:
+After extraction, `sourceKinetics` therefore scores each source's kinetics from its least-squares trace at `analyzeHz` (`sources/temporal/kinetic_score`), and sources below `params.minKineticScore` are removed (default 0.2 for SLAP2, 0, keeping every source, for other recordings). Sources with fewer than 5 transients cannot be scored and are kept. On that session the scores fell into two groups, near 0 and near 1, and at 0.2 the test removed:
 
 | seeding | removed, Path1 | removed, Path2 |
 |---|---|---|
-| `'getActImPeaks'`, `params.peakth` 8 | 1 of 106 | 16 of 74 |
-| `'getActImPeaks'`, `params.peakth` 3 | 90 of 326 | 218 of 353 |
-| `'wmf'`, `params.wmfPeakth` 5 | 28 of 137 | 84 of 159 |
-| `'wmf'`, `params.wmfPeakth` 3 | 95 of 236 | 125 of 219 |
+| `'getActImPeaks'`, `params.peakth` 8 | 0 of 106 | 15 of 74 |
+| `'getActImPeaks'`, `params.peakth` 3 | 58 of 326 | 182 of 353 |
+| `'wmf'`, `params.wmfPeakth` 5 | 25 of 137 | 78 of 159 |
+| `'wmf'`, `params.wmfPeakth` 3 | 77 of 236 | 108 of 219 |
 
-The test kept 76–98% of the sources in ROIs with strong activity and 20–41% of those in the others. At 3, `'getActImPeaks'` kept 236 and 135 sources, against 105 and 58 at 8. Weak sources are scored with less certainty: in simulations of transients with the indicator's kinetics at 1 Hz in Poisson noise, the median score was 0.54 and 21% scored below 0.4. The test has not been validated on non-SLAP2 recordings. Building the kinetics into the activity image itself is planned for GIAnT-Python ([#49](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB/issues/49)).
+At thresholds of 3, the test kept 87–100% of the sources in ROIs with strong activity and 31–61% of those in the others. At 3, `'getActImPeaks'` kept 268 and 171 sources, against 106 and 59 at 8. On three other sessions it removed 0–7 sources per path (of 33–83). On two of them the scores did not fall into groups: sources whose transients were mostly fast lay along the same dendrites as sources with the indicator's kinetics, and a cutoff of 0.4 would have removed 9–27% of each path's sources, some of which carried indicator-like transients as well. Below 0.2, almost all of a source's transients are fast. Weak sources are scored with less certainty: in simulations of transients with the indicator's kinetics at 1 Hz in Poisson noise, the median score was 0.57, and 0.3% scored below 0.2 (14% below 0.4). The test has not been validated on non-SLAP2 recordings. Building the kinetics into the activity image itself is planned for GIAnT-Python ([#49](https://github.com/AllenNeuralDynamics/GIAnT-MATLAB/issues/49)).
 
 ## Citation
 

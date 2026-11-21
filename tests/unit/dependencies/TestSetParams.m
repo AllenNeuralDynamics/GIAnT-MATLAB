@@ -2,7 +2,7 @@ classdef TestSetParams < matlab.unittest.TestCase
     %TESTSETPARAMS Unit tests for setParams' modality-dependent defaults.
     %   SILo's peak thresholds (peakth, wmfPeakth) and kinetics cutoff
     %   (minKineticScore) default to empty, and setParams fills them for the
-    %   recording's modality: 3, 3 and 0.4 for SLAP2, 8, 5 and 0 otherwise.
+    %   recording's modality: 3, 3 and 0.2 for SLAP2, 8, 5 and 0 otherwise.
     %   Values the caller sets are kept.
     %   Run with: runtests('tests/unit/dependencies/TestSetParams.m')
 
@@ -27,7 +27,7 @@ classdef TestSetParams < matlab.unittest.TestCase
             p = setParams('SILo', struct('isSLAP2', true));
             testCase.verifyEqual(p.peakth, 3);
             testCase.verifyEqual(p.wmfPeakth, 3);
-            testCase.verifyEqual(p.minKineticScore, 0.4);
+            testCase.verifyEqual(p.minKineticScore, 0.2);
         end
 
         function testLegacyMicroscopeField(testCase)
@@ -73,7 +73,7 @@ classdef TestSetParams < matlab.unittest.TestCase
             p = setParams('SILo', struct('isSLAP2', true, 'minKineticScore', 0));
             testCase.verifyEqual(p.minKineticScore, 0);
             p = setParams('SILo', jsondecode('{"isSLAP2":true,"minKineticScore":null}'));
-            testCase.verifyEqual(p.minKineticScore, 0.4);
+            testCase.verifyEqual(p.minKineticScore, 0.2);
         end
     end
 end
