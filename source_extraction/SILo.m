@@ -18,6 +18,10 @@ params.peakMethod = lower(char(params.peakMethod));
 if ~any(strcmp(params.peakMethod, {'getactimpeaks', 'wmf'}))
     error('SILo:peakMethod', 'params.peakMethod must be ''getActImPeaks'' or ''wmf'', not ''%s''.', params.peakMethod);
 end
+if ~isnumeric(params.minKineticScore) || ~isscalar(params.minKineticScore) ...
+        || ~isreal(params.minKineticScore) || ~(params.minKineticScore >= 0)
+    error('SILo:minKineticScore', 'params.minKineticScore must be a number of at least 0 (0 keeps every source).');
+end
 if ~nargin
     if ~isInteractiveSession()
         error('SILo:NonInteractive', 'No interactive display: pass the trial_table.h5 path (or its folder) to SILo.');
@@ -77,6 +81,7 @@ for DMDix = nDMDs:-1:1
         exptSummary.actIM{DMDix} = [];
         exptSummary.selPix{DMDix} = [];
         exptSummary.sources{DMDix} = struct('R', [], 'C', [], 'V', []);
+        exptSummary.sourceKinetics{DMDix} = [];
         exptSummary.userROIs{DMDix} = [];
         exptSummary.peaks{DMDix} = cell(1, nTrials);
         exptSummary.perTrialMeanIMs{DMDix} = [];
@@ -404,6 +409,10 @@ for DMDix = nDMDs:-1:1
             els = cell(1,numel(fns));
             E = processAllTrials_Async(mocodr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, params);
         end
+        %score each source's transient kinetics; with minKineticScore > 0,
+        %remove sources whose transients are faster than the indicator.
+        %selPix is left whole: the footprints index its union of pixels
+        [E, sources, exptSummary.sourceKinetics{DMDix}] = rejectFastSources(E, sources, params);
         exptSummary.E(:,DMDix) = E;
         fprintf('[SILo timing] Path %d: extraction %.1f s\n', DMDix, toc(stageTimer));
     end
