@@ -2,7 +2,9 @@ function [skIm, P] = localizeSources_vIM(IM, vIM, params, doPlot)
 %inputs:
 %IM:        3D recording, X x Y x Time
 %aData:     alignment metadata
-nTimePoints = size(IM,3);
+%IM and vIM are masked and filtered in place: pass them without keeping
+%other references to them (as loadAndProcessTrialAsync does), or MATLAB
+%copies both. Movie-sized arrays are cleared as soon as they are used.
 tau = params.tau_s.*params.alignHz; %time constant in frames
 params.tau_frames = tau;
 sigma = params.sigma_px; %space constant in pixels
@@ -12,6 +14,7 @@ nans = isnan(IM);
 
 sz = size(IM);
 valid = mean(nans,3)<params.nanThresh; %a pixel must be imaged at least (1-nanThresh) of the time to be included
+clear nans
 if ~any(valid)
     warning('Recording had no valid pixels; likely too much motion')
     P = [];
@@ -23,15 +26,15 @@ if nargin<4
 end
 
 if isempty(vIM) %for raster imaging
-    vIM = ones(sz);
+    vIM = ones(sz, 'like', IM);
 end
 
 %initialize filtered image
 IMf = IM; clear IM;
-IMf(repmat(~valid, 1, 1, nTimePoints)) = nan;
+IMf = setFrames(IMf, ~valid, nan);
 nans = isnan(IMf);
 nanFrac = mean(nans,3);
-vIM(nans) = nan; %1000*mean(vIM(:,:, 1:min(end,400)), 'all', 'omitnan');
+vIM = setFrames(vIM, nans, nan); %1000*mean(vIM(:,:, 1:min(end,400)), 'all', 'omitnan');
 
 % %fill in missing values
 % IMf= reshape(IMf, sz(1)*sz(2), []);
@@ -47,14 +50,18 @@ IMs = smoothdata(IMf./vIM, 3, 'movmean', ceil(denoiseWindow/2), 'omitnan');
 vIM = 1./smoothdata(1./vIM, 3, 'movmean', ceil(denoiseWindow/2), 'omitnan');
 IMs = IMs.*vIM;
 
+%variance of the smoothed data, for Vb and Vk below (computed before the
+%baseline so that IMs can be cleared as soon as the baseline is made)
+firstValidFrames = find(any(~nans, [1 2]),500, 'first');
+varIM = var(IMs(:,:,firstValidFrames),0,3,"omitmissing");
+
 %baseline estimate
 IMb = smoothdata(IMs, 3, 'movmedian', baselineWindow, 'omitnan');
+clear IMs
 
 %estimate Vb and Vk, parameters for estimating variance from baseline brightness
 % Vb: the variance of a 'dim' pixel due to electronic and dark noise
 % Vk: the slope of the variance-brightness relationship
-firstValidFrames = find(any(~nans, [1 2]),500, 'first');
-varIM = var(IMs(:,:,firstValidFrames),0,3,"omitmissing");
 varIM(nanFrac>0.4) = nan;
 Vb = params.VIF*prctile(varIM, 10, 'all');
 varPred = mean(IMb(:,:,firstValidFrames),3,'omitmissing').* mean(vIM(:,:,firstValidFrames),3,'omitmissing');
@@ -64,10 +71,12 @@ Vk = prctile((varIM(selBright)-(Vb/params.VIF))./varPred(selBright), 10);
 %Highpass filter in time; This must occur before DoG to avoid edge artifacts
 IMf = IMf - IMb; 
 
-stdIM = sqrt(max(0,Vk.*IMb.*vIM)+Vb); %compute standard deviation
+stdIM = IMb; clear IMb %in the baseline's memory
+stdIM = sqrt(max(0,Vk.*stdIM.*vIM)+Vb); %compute standard deviation
+clear vIM
 %divide by uncertainty to get a Z-score
 IMf = IMf./stdIM;
-clear IMb vIM
+clear stdIM
 
 %time matched filter
 gamma = exp(-1/tau);
@@ -79,13 +88,12 @@ for t = size(IMf,3):-1:1
     IMf(:,:,t) = gamma*mem + (1-gamma)*IMt;
     mem = IMf(:,:,t);
 end
-IMf(nans) = nan;
 
 %Difference of Gaussians
-IMf(nans) = 0;
+IMf = setFrames(IMf, nans, 0);
 IMf = imgaussfilt(IMf, [sigma sigma]);
 IMf = IMf - imgaussfilt(IMf, 5*[sigma sigma]);
-IMf(nans) = nan;
+IMf = setFrames(IMf, nans, nan);
 
 %nonmax suppression- find maxima
 skIm = zeros(sz(1:2));
@@ -94,13 +102,14 @@ for fr = size(IMf,3)-ceil(1.5*tau):-1:2 %ceil(tau) because the filtering is unce
     IMfr = IMf(:,:,fr); IMpre = IMf(:,:,fr-1); IMpost = IMf(:,:,fr+1);
     
     selMax = IMfr==ordfilt2(IMfr,9, ones(3));
-    IMlocalMax(:,:,fr) = selMax & IMfr>IMpre & IMfr>=IMpost;
+    localMax = selMax & IMfr>IMpre & IMfr>=IMpost;
     %maxinds = find(IMfr==ordfilt2(IMfr,9, ones(3)));
     % sel = IMfr(maxinds)>0 & IMpre(maxinds)<=IMfr(maxinds) & IMpost(maxinds)<=IMfr(maxinds);
     % %sel = IMpre(maxinds)<=IMfr(maxinds) & IMpost(maxinds)<=IMfr(maxinds);
     % maxinds = maxinds(sel);
-    skIm(IMlocalMax(:,:,fr)) = skIm(IMlocalMax(:,:,fr)) + IMfr(IMlocalMax(:,:,fr)).^2; 
+    skIm(localMax) = skIm(localMax) + IMfr(localMax).^2;
 end
+clear IMf
 skIm = skIm./(300+sum(~nans(:,:,2:end-ceil(1.5*tau)),3)); %normalize to # observations w regularizer
 clear nans
 
@@ -133,4 +142,15 @@ if doPlot
     figure, imagesc(summaryEroded); %hAx2 = gca;
 end
 
+end
+
+function X = setFrames(X, mask, val)
+%X(mask) = val, one frame at a time. mask is rows x cols (every frame) or
+%rows x cols x frames. Indexing the whole movie with a logical mask makes an
+%index array of 8 bytes per masked element, up to twice the movie.
+for t = 1:size(X,3)
+    x = X(:,:,t);
+    x(mask(:,:,min(t,end))) = val;
+    X(:,:,t) = x;
+end
 end

@@ -170,7 +170,7 @@ for DMDix = nDMDs:-1:1
     fns = trialTable.motion_correction.fn_reg_ds(DMDix, :);
     parfor (trialIx = 1:nTrials, nLocWorkers)
         if keepTrials(DMDix,trialIx)
-            [~, mIM{trialIx}, aIM{trialIx}, alignData{trialIx}, peaks{trialIx}, discardFrames{trialIx}, hIM{trialIx}]= loadAndProcessTrialAsync(mocodr, fns{trialIx}, numChannels, params);
+            [mIM{trialIx}, aIM{trialIx}, alignData{trialIx}, peaks{trialIx}, discardFrames{trialIx}, hIM{trialIx}]= loadAndProcessTrialAsync(mocodr, fns{trialIx}, numChannels, params);
         end
     end
     fprintf('[SILo timing] Path %d: localization %.1f s\n', DMDix, toc(stageTimer));

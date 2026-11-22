@@ -11,15 +11,14 @@ function [bytesPerTrial, channelBytes] = localizationTrialBytes(mocoDr, fns, num
 %   trials of a recording are often partial, and a partial first trial can be
 %   a small fraction of the others.
 %
-%   A worker peaks at ~8.3x one channel of its movie plus ~1 GB, while
-%   localizeSources_vIM computes the s.d. (stdIM). It then holds eight
-%   movie-sized single arrays of the activity channel and its NaN mask: the
-%   movie and the variance factors that loadAndProcessTrialAsync keeps, the
-%   masked copies localizeSources_vIM makes of both, the smoothed movie, the
-%   baseline, the s.d. and one temporary. The other channels are freed before
-%   localization (loading two channels peaks at ~4x). Measured: 26.0 GB for a
-%   780125 trial of 3.04 GiB per channel (Windows); 5.7-6.7x or more on Linux
-%   exports (lower bounds from total memory with 5-6 workers). Allow 9x.
+%   A worker peaks at ~4.3x one channel of its movie plus ~0.8 GB, while
+%   localizeSources_vIM smooths the movie and makes its baseline. It then
+%   holds four movie-sized single arrays of the activity channel (the movie,
+%   its variance factors, the smoothed movie and the baseline) and its NaN
+%   mask. Loading the movie's two channels peaks at ~4x. Measured on 780125
+%   trials of ~2250 frames (2.3-3.0 GiB per channel, TIF and h5, Windows).
+%   Trials of up to ~500 frames peak at ~5.7x: the variance of the first
+%   500 valid frames copies the whole smoothed movie. Allow 6x.
 
 channelBytes = nan(1, numel(fns));
 for ix = 1:numel(fns)
@@ -37,5 +36,5 @@ for ix = 1:numel(fns)
             'Error loading registered movie: %s\nAre paths in your trial table valid?', fns{ix});
     end
 end
-bytesPerTrial = 9*max(channelBytes) + 2^30;
+bytesPerTrial = 6*max(channelBytes) + 2^30;
 end
