@@ -69,6 +69,13 @@ for problemIx = 1:nProblems %9
     sources_p.C = sources_p.C-colSupport(1)+1;
     selPix_p = selPix_p(rowSupport(1):rowSupport(2), colSupport(1):colSupport(2));
 
+    %DEBUG (fit-artifact investigation, not for merging): save subproblems with
+    %a source whose 3x3 centre has filled-in (missing) samples in >1% of frames
+    if isfield(params, 'debugDumpDir') && ~isempty(params.debugDumpDir)
+        dumpSubproblem(params, Y_p, F_inv_p, Finv, sources_p, selPix_p, rowSupport, colSupport, ...
+            sourceList{problemIx}, sources, problemIx, sz, size(Y_obs));
+    end
+
     if nargin>6 %Ground truth supplied
         GTp.S = GT.S(selSources,:); % spikes,sources x time
         GTp.X = GT.X(selSources,:); % S convolved with kernel
@@ -103,6 +110,36 @@ if doParallel
     varargout{1} = afterAll(analysisFutures,@(x)assembleResults(x, pxList_p, selIdxs, sourceList, numel(sources.R), size(Y_obs,2), photonScale),5, "PassFuture",true);
 else
     varargout = {H,S,LS,F0,SNR}; %#ok<USENS>
+end
+end
+
+function dumpSubproblem(params, Y_p, F_inv_p, Finv, sources_p, selPix_p, rowSupport, colSupport, srcIdx, sources, problemIx, sz, szY)
+%DEBUG: one folder per extractTrial call (call_###), numbered in call order
+persistent callDir lastY
+dumpDir = params.debugDumpDir;
+key = [szY sz];
+if problemIx == 1 || isempty(callDir) || ~isequal(lastY, key)
+    if ~exist(dumpDir, 'dir'), mkdir(dumpDir); end
+    n = numel(dir(fullfile(dumpDir, 'call_*'))) + 1;
+    callDir = fullfile(dumpDir, sprintf('call_%03d', n));
+    mkdir(callDir);
+    lastY = key;
+end
+filledVal = 100 * median(Finv(:), 'omitnan');
+fillFrac = zeros(numel(sources_p.R), 1);
+ix = zeros(size(selPix_p)); ix(selPix_p) = 1:nnz(selPix_p);
+for s = 1:numel(sources_p.R)
+    r = sources_p.R(s) + (-1:1); c = sources_p.C(s) + (-1:1);
+    r = r(r >= 1 & r <= size(selPix_p, 1)); c = c(c >= 1 & c <= size(selPix_p, 2));
+    k = ix(r, c); k = k(k > 0);
+    if isempty(k), fillFrac(s) = 1; continue, end
+    fillFrac(s) = mean(F_inv_p(k, :) > filledVal, 'all');
+end
+if any(fillFrac > 0.01)
+    Y_p = single(Y_p); F_inv_p = single(F_inv_p); %#ok<NASGU>
+    srcR = sources.R(srcIdx); srcC = sources.C(srcIdx); %#ok<NASGU>
+    save(fullfile(callDir, sprintf('sub_%03d.mat', problemIx)), 'Y_p', 'F_inv_p', 'sources_p', 'selPix_p', ...
+        'rowSupport', 'colSupport', 'srcIdx', 'srcR', 'srcC', 'fillFrac', 'filledVal', 'params', 'sz', 'szY', '-v7.3');
 end
 end
 
