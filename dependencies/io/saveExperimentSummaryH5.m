@@ -13,7 +13,10 @@ function saveExperimentSummaryH5(filename, exptSummary, trialTable)
 %       /Path{n}/global/F
 %       /Path{n}/user_rois/{labels, mask, F, Fsvd}
 %       /Path{n}/sources/spatial/{profiles, coords}
-%       /Path{n}/sources/temporal/{dF_ls, dF_denoised, events, F0, SNR}
+%       /Path{n}/sources/temporal/{dF_ls, dF_denoised, events, F0, SNR,
+%                                  kinetic_score, kinetic_n_events}
+%       /Path{n}/sources/rejected/{seed_coords, kinetic_score, kinetic_n_events}
+%                                  (sources removed by the kinetics test)
 %
 %   Per-trial traces are concatenated along the time axis for the valid
 %   trials in exptSummary.E; invalid (skipped) trials contribute 0 frames
@@ -358,6 +361,22 @@ function src = buildSources(exptSummary, DMDix, framesPerTrial, totalFrames, ...
     nTrials, selPix, numChannels, orderedChannels)
 src = struct();
 
+% transient kinetics (rejectFastSources): the seed positions and scores of
+% the sources it removed, written before the early returns below so they
+% are kept when every source on the path was removed
+kin = [];
+if isfield(exptSummary, 'sourceKinetics') && numel(exptSummary.sourceKinetics) >= DMDix
+    kin = exptSummary.sourceKinetics{DMDix};
+end
+if ~isempty(kin) && ~isempty(kin.rejected.R)
+    nRejected = numel(kin.rejected.R);
+    % 0-indexed [z_loc, y_loc, x_loc], as visualizations/act_im_peaks
+    src.rejected = struct( ...
+        'seed_coords', [zeros(nRejected, 1), double(kin.rejected.R(:)) - 1, double(kin.rejected.C(:)) - 1], ...
+        'kinetic_score', double(kin.rejected.score(:)), ...
+        'kinetic_n_events', int32(kin.rejected.nEvents(:)));
+end
+
 % Find first valid trial to grab spatial footprints and shape info
 firstValid = 0;
 E0 = [];
@@ -474,6 +493,11 @@ for tIx = 1:nTrials
 end
 if any(~isnan(snrAcrossTrials), 'all')
     temp.SNR = mean(snrAcrossTrials, 2, 'omitnan');
+end
+% transient kinetics (rejectFastSources) of the saved sources
+if ~isempty(kin) && numel(kin.score) == nSources
+    temp.kinetic_score = double(kin.score(:));
+    temp.kinetic_n_events = int32(kin.nEvents(:));
 end
 src.temporal = temp;
 end

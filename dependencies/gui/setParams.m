@@ -27,6 +27,7 @@ switch fnName
         params.wmfPeakth = [];          tooltips.wmfPeakth = 'peakMethod ''wmf'': detection threshold (z-score of the whitened matched filter image); empty: 3 for SLAP2, 5 otherwise';
         params.wmfDip = 3;              tooltips.wmfDip = 'peakMethod ''wmf'': dip (z units) the filtered image must show between two nearby maxima to keep them as two sources (and dip/sqrt(2) in each half of the trials, when there are at least 4)';
         params.wmfDeblendth = 8;        tooltips.wmfDeblendth = 'peakMethod ''wmf'': threshold (z units of the filtered image, at least wmfPeakth) for adding a seed where the residual of the seeds'' fit still peaks, and wmfDeblendth/sqrt(2) in each half of the trials; resolves sources too close to show a dip; Inf turns it off';
+        params.minKineticScore = [];    tooltips.minKineticScore = 'remove sources whose transients are faster than the indicator. Each source''s strongest transients are averaged, and the average one decay time constant (tau_s) after the peak, relative to the peak, is divided by the indicator''s exp(-1): about 1 for the indicator''s kinetics, about 0 for one-frame transients (see sourceKinetics). Sources scoring below this are removed after extraction; sources with fewer than 5 transients, and all sources when tau_s rounds to fewer than 3 frames at analyzeHz, are kept. 0 keeps every source; empty: 0.2 for SLAP2, 0 otherwise';
         params.nWorkers = 12;           tooltips.nWorkers = 'number of parallel workers';
         params.drawUserRois = true;     tooltips.drawUserRois = 'use user ROIs (annotations.h5, else post-acquisition annotations, else draw them)?';
         params.allowAnnotationGUI = true; tooltips.allowAnnotationGUI = 'open the ROI GUI for paths without usable annotations? Never opens in -batch/-nodisplay sessions; such paths are processed without user ROIs';
@@ -102,12 +103,17 @@ function params = resolveModalityDefaults(fnName, params)
 % recording's modality (params.isSLAP2). SILo's peak thresholds are lower for
 % SLAP2: on SLAP2 sessions, a sign-flip estimate of the false-discovery rate
 % across trials put both at about 3 (issue #42); other recordings keep 8 and 5.
+% At those thresholds many SLAP2 sources have transients far faster than the
+% indicator, which the kinetics test removes (minKineticScore, issue #49; at 0.2,
+% sources whose transients are almost all that fast);
+% other recordings keep every source until the test is validated on them.
 if ~strcmp(fnName, 'SILo') || ~isstruct(params) || ~isfield(params, 'isSLAP2')
     return
 end
-%            field        SLAP2  otherwise
-defaults = {'peakth',     3,     8
-            'wmfPeakth',  3,     5};
+%            field              SLAP2  otherwise
+defaults = {'peakth',           3,     8
+            'wmfPeakth',        3,     5
+            'minKineticScore',  0.2,   0};
 col = 3 - logical(params.isSLAP2); %2 for SLAP2, 3 otherwise
 for i = 1:size(defaults, 1)
     if ~isfield(params, defaults{i, 1}) || isempty(params.(defaults{i, 1}))

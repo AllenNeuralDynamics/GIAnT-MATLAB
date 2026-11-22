@@ -280,6 +280,64 @@ classdef TestSILo < matlab.unittest.TestCase
                 [zeros(nSources,1) args.sources.R(:)-1 args.sources.C(:)-1]);
             testCase.verifyEqual(double(es.Path1.frame_info.trial_num_frames(:)), ...
                 testCase.NumFrames*ones(testCase.NumTrials, 1));
+            % at 20 Hz the 24 ms decay is not resolved: scored NaN, all kept
+            kScore = double(es.Path1.sources.temporal.kinetic_score);
+            testCase.verifyNumElements(kScore, nSources);
+            testCase.verifyTrue(all(isnan(kScore)));
+            testCase.verifyFalse(isfield(es.Path1.sources, 'rejected'));
+        end
+
+        function testKineticsTestRemovesFastSources(testCase)
+            % The fake extractor gives odd-numbered sources one-frame
+            % transients and even-numbered ones transients that decay with
+            % tau_s (3 frames at 20 Hz here); minKineticScore removes the odd
+            % ones and records where they were.
+            testCase.NumFrames = 200;
+            testCase.writeDataset(1);
+
+            testCase.runSILo(testCase.Dr, struct('tau_s', 0.15, 'minKineticScore', 0.4));
+
+            args = testCase.loadExtractorArgs();
+            nSeeds = numel(args.sources.R);
+            testCase.assertGreaterThan(nSeeds, 1);
+            kept = (2:2:nSeeds)';
+            removed = (1:2:nSeeds)';
+            es = loadStructFromH5(fullfile(testCase.SaveDr, 'source_extraction', 'experiment_summary.h5'));
+            src = es.Path1.sources;
+            testCase.verifyEqual(double(es.Path1.visualizations.act_im_peaks), ...
+                [zeros(numel(kept),1) args.sources.R(kept)-1 args.sources.C(kept)-1]);
+            testCase.verifyEqual(size(src.temporal.dF_ls, 1), numel(kept));
+            % at 20 Hz the 1 s high-pass takes part of each transient, so
+            % the scores fall short of 1, but well above the cutoff
+            testCase.verifyGreaterThan(double(src.temporal.kinetic_score(:)), 0.5);
+            testCase.verifyEqual(double(src.rejected.seed_coords), ...
+                [zeros(numel(removed),1) args.sources.R(removed)-1 args.sources.C(removed)-1]);
+            testCase.verifyLessThan(double(src.rejected.kinetic_score), 0.4);
+        end
+
+        function testKineticsTestRecordsSourcesWhenAllAreRemoved(testCase)
+            % A cutoff above every score removes every source; the summary
+            % still records where they were.
+            testCase.NumFrames = 200;
+            testCase.writeDataset(1);
+
+            testCase.runSILo(testCase.Dr, struct('tau_s', 0.15, 'minKineticScore', 2));
+
+            args = testCase.loadExtractorArgs();
+            nSeeds = numel(args.sources.R);
+            testCase.assertGreaterThan(nSeeds, 1);
+            es = loadStructFromH5(fullfile(testCase.SaveDr, 'source_extraction', 'experiment_summary.h5'));
+            src = es.Path1.sources;
+            testCase.verifyFalse(isfield(src, 'temporal'));
+            testCase.verifyEqual(double(src.rejected.seed_coords), ...
+                [zeros(nSeeds,1) args.sources.R(:)-1 args.sources.C(:)-1]);
+            testCase.verifyNumElements(src.rejected.kinetic_score, nSeeds);
+        end
+
+        function testRejectsNegativeKineticCutoff(testCase)
+            testCase.writeDataset(1);
+            testCase.verifyError(@() testCase.runSILo(testCase.Dr, struct('minKineticScore', -1)), ...
+                'SILo:minKineticScore');
         end
 
         function testReturnsDerivedParams(testCase)
