@@ -1,10 +1,37 @@
-function  [IM, meanIM, IMc, aData, peaks, discardFrames, halfIMs]= loadAndProcessTrialAsync(mocoDr, fn, numChannels, params)
+function  [meanIM, IMc, aData, peaks, discardFrames, halfIMs]= loadAndProcessTrialAsync(mocoDr, fn, numChannels, params)
 % mocoDr: directory with motion-corrected outputs (downsampled registered TIFF/H5 and *_ALIGNMENTDATA.h5).
 % halfIMs: rows x cols x channels x 2, the mean images of two independent
 % halves of the frames of equal size (alternating 0.5 s blocks, balanced by
 % trialHalves), for the reliability weights
 % of the patchwise across-trial alignment (alignTrialsPatchwise); empty unless
 % params.interTrialAlignment is 'patchwise'.
+% The movie is handed to localizeSources_vIM and not returned (see takeMovie).
+    [IM, vIM, meanIM, aData, discardFrames, halfIMs, params] = loadTrial(mocoDr, fn, numChannels, params);
+    try
+       [IMc, peaks] = localizeSources_vIM(takeMovie(), takeVarFactors(), params);
+    catch
+        %retry with the image edges excluded; the movie was handed over, so
+        %load it again
+        [IM, vIM] = loadTrial(mocoDr, fn, numChannels, params);
+        IM([1 end],:,:) = nan;
+        IM(:,[1 end],:) = nan;
+        [IMc, peaks] = localizeSources_vIM(takeMovie(), takeVarFactors(), params);
+    end
+
+    %Hand the movie and its variance factors to localizeSources_vIM without
+    %keeping a reference here, so that it masks and filters them in place
+    %instead of copying both
+    function X = takeMovie()
+        X = IM; IM = [];
+    end
+    function X = takeVarFactors()
+        X = vIM; vIM = [];
+    end
+end
+
+function [IM, vIM, meanIM, aData, discardFrames, halfIMs, params] = loadTrial(mocoDr, fn, numChannels, params)
+% IM: the activity channel, rows x cols x frames, with discarded frames set to NaN
+% vIM: its variance factors (aData.slap2.varFacDS, removed from aData), or []
     if endsWith(fn, '.h5')
         desc = h5info([mocoDr filesep fn]);
         IM = h5read([mocoDr filesep fn], ['/', desc.Datasets.Name]);
@@ -62,13 +89,5 @@ function  [IM, meanIM, IMc, aData, peaks, discardFrames, halfIMs]= loadAndProces
         aData.slap2 = rmfield(aData.slap2, 'varFacDS');
     else
         vIM = [];
-    end
-
-    try
-       [IMc, peaks] = localizeSources_vIM(IM, vIM, params);
-    catch ME
-        IM([1 end],:,:) = nan;
-        IM(:,[1 end],:) = nan;
-        [IMc, peaks] = localizeSources_vIM(IM, vIM, params);
     end
 end
