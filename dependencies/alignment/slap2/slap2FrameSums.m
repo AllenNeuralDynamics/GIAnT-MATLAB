@@ -266,7 +266,13 @@ for s = 1:nS
     dk = Cs * Ssum;
     for k = 1:nDen
         add = dk;
-        if ~isempty(Vbad), add = add - Gs * Vbad(:, :, k); end
+        if ~isempty(Vbad)
+            add = add - Gs * Vbad(:, :, k);
+            %where no valid sample is left: exactly 0, as in getImage, not the
+            %roundoff of the subtraction (about +-1e-16, which makes Num./Den
+            %a signed zero instead of NaN)
+            add(add < 1e-9 * dk) = 0;
+        end
         Den(dst, fcols, k) = Den(dst, fcols, k) + add(rowsOut, :);
     end
 end

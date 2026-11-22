@@ -118,6 +118,28 @@ classdef TestSlap2Frames < matlab.unittest.TestCase
             testCase.verifyEqual(double(F), Fref, 'RelTol', 1e-6);
         end
 
+        function testPixelsWithOnlyInvalidSamples(testCase)
+            % a pixel whose samples are all invalid has no value (NaN) and a
+            % weight of exactly 0, as with getImage
+            S2 = testCase.makeData('all');
+            lines = zeros(testCase.totalLines, 2); map = [0 1; 1 0];
+            [IM, F] = slap2Frames(S2, [1 2], [30 31], 4);
+            [IMref, Fref] = testCase.reference(S2, [1 2], [30 31], 4, 'exp', lines, map);
+            [~, Fall] = testCase.reference(S2, [1 2], [30 31], 4, 'exp', lines, map, false, false);
+            onlyInvalid = Fref == 0 & Fall > 0;
+            testCase.assertGreaterThan(nnz(onlyInvalid), 0);
+            testCase.verifyTrue(all(isnan(IM(repmat(permute(onlyInvalid, [1 2 4 3]), 1, 1, 2, 1))), 'all'));
+            testCase.verifyEqual(isnan(IM), isnan(single(IMref)));
+            testCase.verifyEqual(double(IM(~isnan(IM))), IMref(~isnan(IMref)), 'RelTol', 1e-6);
+            testCase.verifyEqual(double(F), Fref, 'RelTol', 1e-6); % exactly 0 where Fref is
+            % the frame sums that extraction uses, which leave out lines exactly dtRead away
+            [Num, Den, pix] = slap2FrameSums(S2, [2 1], [30 31], 4, Boundary = 'exclusive');
+            [IMs, Fs] = testCase.toImage(Num, Den, pix, 2);
+            [IMsRef, FsRef] = testCase.reference(S2, [2 1], [30 31], 4, 'exp', lines, map, true, true);
+            testCase.verifyEqual(isnan(IMs), isnan(IMsRef));
+            testCase.verifyEqual(Fs, FsRef, 'RelTol', 1e-9);
+        end
+
         function testNonIntegerLinesError(testCase)
             S2 = testCase.makeData();
             testCase.verifyError(@() slap2Frames(S2, 1, 20.5, 4), 'slap2Frames:nonIntegerLines');
@@ -340,7 +362,12 @@ classdef TestSlap2Frames < matlab.unittest.TestCase
                 for j = 1:numel(chs)
                     v(:, j) = 1000 * chs(j) + 3 * k + 7 * li(i) + 11 * ci(i) + mod(k .* ci(i), 5);
                 end
-                if withInvalid && mod(ci(i), 3) == 0
+                if isequal(withInvalid, 'all')
+                    % every line's 2nd and 22nd superpixels: some raster pixels
+                    % (each line's 2nd, which the line before samples as its
+                    % 22nd) then have only invalid samples
+                    v([2 22], :) = double(intmin('int16'));
+                elseif withInvalid && mod(ci(i), 3) == 0
                     v(2, :) = double(intmin('int16'));
                 end
                 out{i} = int16(v);
