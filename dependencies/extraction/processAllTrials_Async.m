@@ -192,6 +192,7 @@ if params.isSLAP2
             %as getImages(orderedChannels, frameLines(fIxs), ceil(dt), 1, 1), trimmed
             %and interpolated with interpFrames, at the sampled pixels only, but with
             %the channels in analysis order (getImages returns them in file order)
+            %and without invalid samples (see rawFramesAt)
             [compB, dB] = blockCompensation(comp, frameLines(fIxs));
             [Yq, Fq] = slap2FramesAt(S2data, orderedChannels, frameLines(fIxs), ceil(dt), ...
                 alignDataSlap2.trimRows, alignDataSlap2.trimCols, rD, cD, motionR(fIxs) - dB(1), motionC(fIxs) - dB(2), compB);
@@ -366,7 +367,8 @@ CD.discardFrames = discard;
 end
 
 function [Yq, Fq] = slap2FramesAt(S2, ch, times, dt, trimRows, trimCols, rD, cD, mR, mC, comp)
-%the frames getImages(ch, times, dt, 1, 1) returns, trimmed to trimRows x
+%the frames getImages(ch, times, dt, 1, 1) returns, without its invalid
+%samples (see rawFramesAt), trimmed to trimRows x
 %trimCols and interpolated as interpFrames does, at rows rD + mR(f) and columns
 %cD + mC(f) of frame f: Yq is numel(rD) x channels (in the order of ch) x frames, Fq (the variance
 %multiplier) numel(rD) x frames. Frames are formed only at the raster
@@ -478,8 +480,15 @@ end
 function [V, W] = rawFramesAt(S2, ch, times, dt, id, comp)
 %getImages' frames at raster superpixels id only: V is numel(id) x frames x
 %channels (in the order of ch), W (getImages' dataCount) numel(id) x frames.
-%As getImages, a frame leaves out the lines exactly dtRead from its time and
-%does not skip invalid samples. comp, when not empty, is a struct with fields
+%As getImages, a frame leaves out the lines exactly dtRead from its time.
+%Unlike getImages, it skips invalid samples (<= intmin('int16'), which SLAP2
+%records where it took no sample, for example where the online motion
+%correction moved a superpixel off the DMD), as getImage and slap2Frames do:
+%summed in, each would count as about -32768 raw counts, and the strongly
+%negative values pull source extraction's fit far up (its loss for an
+%observation Z < -1 is lowest at a prediction of -Z-2). V is then the mean of
+%each channel's valid samples (NaN where a frame has none) and W the summed
+%weight of the first channel's. comp, when not empty, is a struct with fields
 %Offsets (getLineOnlineOffsets(S2)) and RefOffset ([x y], or empty for the
 %median): the lines' samples are then moved by their online offsets first, and
 %id are pixels of the frame RefOffset (see slap2FrameSums).
@@ -489,11 +498,11 @@ if ~isempty(comp)
     args = {'CompensateOnline', true, 'Offsets', comp.Offsets, 'RefOffset', comp.RefOffset};
     if isfield(comp, 'Mapping'), args = [args {'Mapping', comp.Mapping}]; end
 end
-[Num, Den, pix] = slap2FrameSums(S2, ch, times, dt, 'Boundary', 'exclusive', 'MaskInvalid', false, ...
+[Num, Den, pix] = slap2FrameSums(S2, ch, times, dt, 'Boundary', 'exclusive', 'MaskInvalid', true, ...
     'Pixels', id, args{:});
 [tf, loc] = ismember(id(:), pix);
 V = nan(numel(id), numel(times), numel(ch));
 W = zeros(numel(id), numel(times));
-V(tf, :, :) = Num(loc(tf), :, :) ./ Den(loc(tf), :);
-W(tf, :) = Den(loc(tf), :);
+V(tf, :, :) = Num(loc(tf), :, :) ./ Den(loc(tf), :, :);
+W(tf, :) = Den(loc(tf), :, 1);
 end

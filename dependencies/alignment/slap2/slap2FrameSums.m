@@ -199,8 +199,8 @@ end
 
 %per shift and line index: samples (slots x lines) times weights (lines x frames).
 %Each shift only touches the frames whose kernels overlap its lines, and the
-%denominator is (slots per pixel and line index) x (summed weights), corrected
-%only where samples are invalid.
+%denominator is (slots per pixel and line index) x (summed weights), except at
+%pixels with invalid samples, where it sums the weights of the valid samples.
 Num = zeros(nPix, nF, nCh); Den = zeros(nPix, nF, nDen);
 [~, order] = sortrows([shiftIdx li]);
 grpKey = (shiftIdx(order) - 1) * P + li(order);
@@ -212,7 +212,7 @@ for s = 1:nS
         rowsOut = find(dest(:, s) > 0);           % rows of the sums below that stay on the image
         if isempty(rowsOut), continue, end
         dst = dest(rowsOut, s);
-        nm = nSlots; pos = []; Gs = tbl.G0; Cs = tbl.Cs0;
+        nm = nSlots; pos = []; Gs = tbl.G0; Cs = tbl.Cs0; rowLine = tbl.slotLine;
     else
         mapped = find(Q(:, s) > 0);
         nm = numel(mapped);
@@ -220,11 +220,14 @@ for s = 1:nS
         pos = zeros(nSlots, 1); pos(mapped) = 1:nm;
         Gs = sparse(Q(mapped, s), (1:nm)', 1, nPix, nm);               % slot -> pixel
         Cs = sparse(Q(mapped, s), tbl.slotLine(mapped), 1, nPix, P);   % pixel x line index: slots landing there
+        rowLine = tbl.slotLine(mapped);
         rowsOut = (1:nPix)'; dst = rowsOut;
     end
     fcols = find(any(Wt(:, shiftIdx == s), 2))';
     nFs = numel(fcols);
-    Y = zeros(nm, nFs, nCh); Ssum = zeros(P, nFs); Vbad = [];
+    %Vok: summed weights of the valid samples of slots (rows) that have invalid
+    %ones (badRow), per channel
+    Y = zeros(nm, nFs, nCh); Ssum = zeros(P, nFs); Vok = []; badRow = [];
     for g = find(grpShift == s)'
         members = order(edges(g):edges(g+1) - 1);
         L = li(members(1));
@@ -251,9 +254,11 @@ for s = 1:nS
             if opts.MaskInvalid
                 bad = Dk <= invalid;
                 if any(bad(:))
-                    if isempty(Vbad), Vbad = zeros(nm, nFs, nCh); end
+                    if isempty(Vok), Vok = zeros(nm, nFs, nCh); badRow = false(nm, nCh); end
                     Dk(bad) = 0;
-                    Vbad(rowsY, :, k) = double(bad) * Wg;
+                    r = any(bad, 2);
+                    Vok(rowsY(r), :, k) = double(~bad(r, :)) * Wg;
+                    badRow(rowsY(r), k) = true;
                 end
             end
             Y(rowsY, :, k) = Dk * Wg;
@@ -266,7 +271,20 @@ for s = 1:nS
     dk = Cs * Ssum;
     for k = 1:nDen
         add = dk;
-        if ~isempty(Vbad), add = add - Gs * Vbad(:, :, k); end
+        if ~isempty(Vok) && any(badRow(:, k))
+            %at pixels with invalid samples, sum the valid samples' weights
+            %directly, as Num sums their values: exactly 0 where none is valid
+            %(NaN image, as in getImage), and exact where the only valid ones are
+            %far in the kernel's tail. Subtracting the invalid weights from dk
+            %would leave roundoff of about eps*dk, larger than such a tail weight
+            %(exp(-dtRead/dt), e.g. exp(-60) at dtRead = 6*dt).
+            hitPix = find(any(Gs(:, badRow(:, k)), 2));
+            cols = find(any(Gs(hitPix, :), 1));
+            Wk = Ssum(rowLine(cols), :);
+            b = badRow(cols, k);
+            Wk(b, :) = Vok(cols(b), :, k);
+            add(hitPix, :) = Gs(hitPix, cols) * Wk;
+        end
         Den(dst, fcols, k) = Den(dst, fcols, k) + add(rowsOut, :);
     end
 end

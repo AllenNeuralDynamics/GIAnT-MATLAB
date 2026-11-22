@@ -19,7 +19,8 @@ classdef Slap2DataFile < dynamicprops
     %                      (hMultiDataFiles, see makeLineData), with known
     %                      tissue motion and a simulated online motion
     %                      correction, for code that reads lines and headers
-    %     linesPerCycle, lineMotion, updateEvery - see makeLineData
+    %     linesPerCycle, lineMotion, updateEvery, invalidLines, invalidCols
+    %                    - see makeLineData
 
     properties (Constant)
         LinePeriod_s = 1e-4
@@ -101,7 +102,7 @@ classdef Slap2DataFile < dynamicprops
                 'shiftAfterLine', Inf, 'shift', [0 0], 'failOnCall', Inf, ...
                 'firstLineTime', NaT, 'lineLevel', false, 'linesPerCycle', 20, ...
                 'lineMotion', struct('drift', [3 -2], 'amp', [1.8 1.5], 'period', [3200 2700]), ...
-                'updateEvery', 26);
+                'updateEvery', 26, 'invalidLines', [], 'invalidCols', []);
             sidecar = [filename '.fake.mat'];
             if isfile(sidecar)
                 s = load(sidecar, 'cfg');
@@ -124,7 +125,10 @@ classdef Slap2DataFile < dynamicprops
             % measured on SLAP2, a new y reaches the DMD 2 lines before the
             % header records it (6 when x changes too). A sample of DMD pixel
             % (r, c) on line l is the texture at (r + yDmd - m_rows, c + x -
-            % m_cols), times 10, divided by the channel number.
+            % m_cols), times 10, divided by the channel number. On lines
+            % invalidLines(1):invalidLines(2), the samples of DMD columns
+            % invalidCols are intmin('int16') in every channel, as SLAP2 records
+            % samples it did not take.
             P = cfg.linesPerCycle; nC = nLines / P;
             assert(nC == round(nC), 'lineLevel fakes need a whole number of cycles.');
             NC = cfg.frameSize(1); NR = cfg.frameSize(2); nCh = cfg.numChannels;
@@ -158,8 +162,13 @@ classdef Slap2DataFile < dynamicprops
                     id = double(spIDs{L}) + 1;
                     r = floor((id - 1) / NR) + 1; col = mod(id - 1, NR) + 1;
                     v = interp2(tc, tr, tex, col + x(li) - m(li, 2), r + yDmd(li) - m(li, 1), 'linear', 10);
+                    bad = false(size(v));
+                    if ~isempty(cfg.invalidLines) && li >= cfg.invalidLines(1) && li <= cfg.invalidLines(2)
+                        bad = ismember(col, cfg.invalidCols);
+                    end
                     for ch = 1:nCh
-                        words(at + hw + (ch - 1) * nSp(L) + (0:nSp(L)-1)) = int16(round(10 * v / ch));
+                        smp = int16(round(10 * v / ch)); smp(bad) = intmin('int16');
+                        words(at + hw + (ch - 1) * nSp(L) + (0:nSp(L)-1)) = smp;
                     end
                 end
             end

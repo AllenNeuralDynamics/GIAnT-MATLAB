@@ -119,6 +119,37 @@ classdef TestCompensatedExtraction < matlab.unittest.TestCase
             end
         end
 
+        function testInvalidSamplesLeftOut(testCase)
+            % SLAP2 records intmin('int16') where it took no sample (for
+            % example where the online correction moved a superpixel off the
+            % DMD). The loader must leave such samples out rather than average
+            % them in as data: summed in, they give strongly negative samples,
+            % which pull source extraction's fit of the sources there far up.
+            % Here a block of lines has invalid samples in some DMD columns;
+            % the samples handed to extraction stay positive (the scene is),
+            % those with no valid sample are filled in as missing, and the
+            % others are as steady as without invalid samples (frames at the
+            % block's edges average only the lines on one side of them, so
+            % their samples differ a little)
+            testCase.writeAcquisition();
+            [~, aK, selPix] = testCase.registerBoth(7);
+            Y0 = testCase.extract(aK, selPix);
+            testCase.writeAcquisition('invalidLines', [10001 15000], 'invalidCols', 24:30);
+            [Y, F] = testCase.extract(aK, selPix);
+            y = double(Y(:, :, 1)); y0 = double(Y0(:, :, 1));
+            filled = F > 100 * median(F(:), 'omitnan');
+            m0 = mean(y0, 2); sd = std(m0);
+            dev0 = max(abs(y0 - m0), [], 'all') / sd;
+            dev = abs(y - m0) / sd; dev = max(dev(~filled));
+            testCase.log(1, sprintf(['min sample %.1f (without invalid samples %.1f); filled %d of %d; ' ...
+                'largest deviation of the others from the pixel''s mean %.3f of the spatial SD (without invalid samples %.3f)'], ...
+                min(y(:)), min(y0(:)), nnz(filled), numel(filled), dev, dev0));
+            testCase.verifyTrue(all(isfinite(Y(:))));
+            testCase.verifyGreaterThan(min(Y(:)), 0, 'no sample is pulled negative by invalid samples');
+            testCase.verifyGreaterThan(nnz(filled), 0, 'samples with no valid sample are filled in as missing');
+            testCase.verifyLessThan(dev, 1.5 * dev0, 'the other samples are as steady as without invalid samples');
+        end
+
         function testExtractionWithoutSwitchesUnchanged(testCase)
             % with a constant online offset, compensation changes nothing
             testCase.writeAcquisition('updateEvery', 1e9);
