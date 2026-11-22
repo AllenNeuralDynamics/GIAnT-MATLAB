@@ -395,6 +395,30 @@ classdef TestSILo < matlab.unittest.TestCase
             testCase.verifyEqual(logical(squeeze(es.Path1.user_rois.mask)), expected);
         end
 
+        function testSizesLocalizationForLargestTrial(testCase)
+            % a partial first trial, as at the start of a recording: the
+            % localization pool is sized for the largest movie, trial 2
+            import matlab.unittest.fixtures.PathFixture
+            import matlab.unittest.fixtures.SuppressedWarningsFixture
+            unitDir = fileparts(fileparts(mfilename('fullpath')));
+            % no pool of workers: SILo sizes the pool, then localizes in the client
+            testCase.applyFixture(PathFixture(fullfile(unitDir, 'dependencies', 'extraction', 'fakes')));
+            testCase.applyFixture(SuppressedWarningsFixture('SILo:noProcessPool'));
+            testCase.writeDataset(1);
+            frames = [3 testCase.NumFrames testCase.NumFrames-2];
+            for t = 1:testCase.NumTrials
+                fn = fullfile(testCase.MocoDr, testCase.regName(1, t));
+                delete(fn);
+                h5create(fn, '/data', [testCase.CropSize testCase.CropSize frames(t)], 'Datatype', 'single');
+            end
+
+            out = evalc('testCase.runSILo(testCase.Dr, struct(''nWorkers'', 2));');
+
+            testCase.verifySubstring(out, sprintf('sized for trial 2, the largest of %d', testCase.NumTrials));
+            args = testCase.loadExtractorArgs();
+            testCase.verifyEqual(args.validTrials(:)', 1:testCase.NumTrials);
+        end
+
         function testErrorsWhenAllTrialsMissing(testCase)
             testCase.writeDataset(1);
             for t = 1:testCase.NumTrials
