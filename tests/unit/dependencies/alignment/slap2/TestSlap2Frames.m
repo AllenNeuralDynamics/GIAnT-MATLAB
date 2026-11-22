@@ -140,6 +140,46 @@ classdef TestSlap2Frames < matlab.unittest.TestCase
             testCase.verifyEqual(Fs, FsRef, 'RelTol', 1e-9);
         end
 
+        function testOnlyValidSampleInKernelTail(testCase)
+            % a pixel whose only valid sample is far in the kernel's tail keeps
+            % that sample: its weight, exp(-dtRead/dt), can be far below the
+            % frame's summed weight, and below the roundoff of a difference of
+            % sums. The frame at line 27 (cycle 5, line index 3) reads lines
+            % 21:33. Pixel 42 is line index 3's 2nd superpixel and line index
+            % 2's 22nd; with those invalid in cycles 5 and 6, its only valid
+            % sample is on line 21, 6 lines away.
+            S2 = testCase.makeData([5 6]);
+            lines = zeros(testCase.totalLines, 2); map = [0 1; 1 0];
+            times = [27 28 33];
+            for dt = [0.25 0.1]   % tail weights exp(-24) and exp(-60)
+                [IM, F] = slap2Frames(S2, [1 2], times, dt);
+                [IMref, Fref] = testCase.reference(S2, [1 2], times, dt, 'exp', lines, map);
+                testCase.verifyFalse(any(isinf(IM(:))), sprintf('dt %g', dt));
+                testCase.verifyEqual(isnan(IM), isnan(single(IMref)), sprintf('dt %g', dt));
+                testCase.verifyEqual(double(IM(~isnan(IM))), IMref(~isnan(IMref)), 'RelTol', 1e-6);
+                testCase.verifyEqual(double(F), Fref, 'RelTol', 1e-6);
+                [r, c] = deal(floor(41 / testCase.NR) + 1, mod(41, testCase.NR) + 1);
+                testCase.verifyEqual(double(F(r, c, 1)), exp(-6 / dt), 'RelTol', 1e-6);
+                testCase.verifyEqual(double(IM(r, c, :, 1)), IMref(r, c, :, 1), 'RelTol', 1e-6);
+                % without the lines exactly dtRead away, it has no valid sample
+                [Num, Den, pix] = slap2FrameSums(S2, [1 2], times, dt, Boundary = 'exclusive');
+                [IMs, Fs] = testCase.toImage(Num, Den, pix, numel(times));
+                [IMsRef, FsRef] = testCase.reference(S2, [1 2], times, dt, 'exp', lines, map, true, true);
+                testCase.verifyEqual(isnan(IMs), isnan(IMsRef));
+                testCase.verifyEqual(IMs(~isnan(IMs)), IMsRef(~isnan(IMsRef)), 'RelTol', 1e-9);
+                testCase.verifyEqual(Fs, FsRef, 'RelTol', 1e-9);
+                testCase.verifyEqual(Fs(r, c, 1), 0);
+                % the same sums for a subset of pixels (as extraction forms them)
+                want = [5 41 42 43 62 101]';
+                [NumW, DenW, pixW] = slap2FrameSums(S2, [1 2], times, dt, 'Pixels', want);
+                [NumA, DenA, pixA] = slap2FrameSums(S2, [1 2], times, dt);
+                [~, loc] = ismember(pixW, pixA);
+                testCase.verifyEqual(pixW, intersect(want, pixA));
+                testCase.verifyEqual(NumW, NumA(loc, :, :), 'RelTol', 1e-12);
+                testCase.verifyEqual(DenW, DenA(loc, :, :), 'RelTol', 1e-12);
+            end
+        end
+
         function testNonIntegerLinesError(testCase)
             S2 = testCase.makeData();
             testCase.verifyError(@() slap2Frames(S2, 1, 20.5, 4), 'slap2Frames:nonIntegerLines');
@@ -367,6 +407,9 @@ classdef TestSlap2Frames < matlab.unittest.TestCase
                     % (each line's 2nd, which the line before samples as its
                     % 22nd) then have only invalid samples
                     v([2 22], :) = double(intmin('int16'));
+                elseif isnumeric(withInvalid) && numel(withInvalid) > 1
+                    % the same superpixels, but only in the cycles withInvalid
+                    if ismember(ci(i), withInvalid), v([2 22], :) = double(intmin('int16')); end
                 elseif withInvalid && mod(ci(i), 3) == 0
                     v(2, :) = double(intmin('int16'));
                 end
