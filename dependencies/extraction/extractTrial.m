@@ -1,8 +1,19 @@
-function varargout = extractTrial(Y_obs,Finv, sources, selPix, params, alignData, GT)
+function varargout = extractTrial(Y_obs,Finv, sources, selPix, params, measured, GT)
+%Y_obs: pixels x frames x channels, at the selPix pixels; Finv, pixels x
+%frames, its inverse freshness (variance multiplier). measured (optional,
+%pixels x frames logical) is false where the trial has no sample at a pixel
+%(e.g. outside the scanned field after motion or an online offset change);
+%the loader fills those samples in and gives them a large Finv. In frames
+%where less than half of a source's footprint is measured, the source's
+%activity is not estimated: it is held at 0 in the fit and returned as NaN
+%(see extractSources).
 
 Y_obs = double(Y_obs);
 Finv = double(Finv);
 sz = size(selPix);
+if nargin < 6 || ~islogical(measured) || isempty(measured)
+    measured = true(size(Finv));
+end
 
 if isempty(params.photonScale) %If not provided, estimate the standard deviation of a dim pixel
     pxSTD = nan(1,size(Y_obs,1));
@@ -61,6 +72,7 @@ for problemIx = 1:nProblems %9
 
     Y_p = Y_obs(selIdxs(pxList_p{problemIx}),:,:); %observations
     F_inv_p = Finv(selIdxs(pxList_p{problemIx}),:); % inverse freshness
+    measured_p = measured(selIdxs(pxList_p{problemIx}),:); % samples the trial has
 
     %crop, to reduce memory and improve visualization
     rowSupport = [find(any(selPix_p,2),1,'first') find(any(selPix_p,2),1,'last')];
@@ -77,15 +89,15 @@ for problemIx = 1:nProblems %9
         GTp.Hs = GT.Hs(selIdxs(pxList_p{problemIx}), selSources); % superres source images; pixels x sources
 
         if doParallel
-            analysisFutures(problemIx) = parfeval(@extractSources, 6, Y_p, F_inv_p, sources_p, selPix_p, params, GTp);
+            analysisFutures(problemIx) = parfeval(@extractSources, 6, Y_p, F_inv_p, measured_p, sources_p, selPix_p, params, GTp);
         else
-            [Hi,Si,F0i, LSi, SNRi, errFinal] = extractSources(Y_p, F_inv_p, sources_p, selPix_p, params, GTp); %#ok<ASGLU>
+            [Hi,Si,F0i, LSi, SNRi, errFinal] = extractSources(Y_p, F_inv_p, measured_p, sources_p, selPix_p, params, GTp); %#ok<ASGLU>
         end
     else
         if doParallel
-            analysisFutures(problemIx) = parfeval(@extractSources, 5, Y_p, F_inv_p, sources_p, selPix_p, params);
+            analysisFutures(problemIx) = parfeval(@extractSources, 5, Y_p, F_inv_p, measured_p, sources_p, selPix_p, params);
         else
-            [Hi,Si,F0i, LSi, SNRi] = extractSources(Y_p, F_inv_p, sources_p, selPix_p, params); %#ok<ASGLU>
+            [Hi,Si,F0i, LSi, SNRi] = extractSources(Y_p, F_inv_p, measured_p, sources_p, selPix_p, params); %#ok<ASGLU>
         end
     end
 
@@ -139,18 +151,20 @@ end
 
 
 
-function [H_est,S_est_new, F0, dFls, Xsnr, errFinal] = extractSources(Y_obs, Finv, sources, selPix, params, GT)
+function [H_est,S_est_new, F0, dFls, Xsnr, errFinal] = extractSources(Y_obs, Finv, measured, sources, selPix, params, GT)
 %performs source extraction by alternating coordinate optimization on the
 %footprints (H,Hs), baseline (B), and source activities (S,X), in a constrained NMF framework
 
 %Yobs is [#selected pixels]x[#timepoints]
 %Finv is [#selected pixels]x[#timepoints], 1./freshness, "freshness" is proportional to #measurements averaged into each sample
+%measured is [#selected pixels]x[#timepoints], false where the trial has no sample (filled in by the loader)
 %selpix is a 2D logical map, containing [#selected pixels] true values, that maps Yobs to 2D space
 %params
 
 %outputs the source footprints (H), the superresolution spikes (S), the
 %footprint-weighted baseline of each source (F0), and the least-squares
-%activity (dFls)
+%activity (dFls). S, F0 and dFls are NaN in the frames where a source is
+%not observed (see sourceObserved).
 
 num_channels = size(Y_obs,3);
 if num_channels>1
@@ -195,6 +209,11 @@ dFls = H_est\(Y_obs-B_est);
 %initialize S
 S_est = max(0, dFls - [zeros(size(dFls,1),1) dFls(:,1:end-1)])./params.k(floor(end/2)+1);
 
+%frames in which each source's footprint is mostly on pixels without samples;
+%its activity there is held at 0 in the fits and returned as NaN
+observed = sourceObserved(H_est, measured, params);
+S_est(~observed) = 0;
+
 %overwrite with GT for testing?
 % B_est = GT.B;
 % S_est = GT.S;
@@ -233,7 +252,7 @@ for outerLoop = 1:params.nmfIter
     %SOLVE FOR S
     if doFitS
         opts.TypicalX = typicalX;
-        [S_est_new, lossS] = fitS(Y_obs, H_est, B_est, params.k, Finv, params.lambda, S_est, [], problemS.lb, problemS.ub, opts);
+        S_est_new = fitObservedS(Y_obs, H_est, B_est, params.k, Finv, params.lambda, S_est, observed, problemS.lb, problemS.ub, opts);
     else
         S_est_new = S_est;
     end
@@ -305,6 +324,8 @@ for outerLoop = 1:params.nmfIter
     H_est = H_est_new;
     Hs_est = Hs_est_new;
     S_est = S_est_new;
+    observed = sourceObserved(H_est, measured, params);
+    S_est(~observed) = 0;
 end
 
 % Debias: freeze small events, refit free set (phi=0 => no L1). Avoids
@@ -335,7 +356,12 @@ residVar = sum(resid.^2.*residWeights,2)./sum(residWeights,2);
 W = diag(1./residVar);
 covX = inv(H_est' * W * H_est); %uncertainty estimate for X
 Xnoise = sqrt(diag(covX)./params.tau_full);
-Xsnr = std(X_est_new, 0,2)./Xnoise;
+if all(observed(:))
+    Xsnr = std(X_est_new, 0,2)./Xnoise;
+else %over the frames in which each source is observed (NaN if none)
+    Xo = X_est_new; Xo(~observed) = nan;
+    Xsnr = std(Xo, 0,2, 'omitnan')./Xnoise;
+end
 
 if any(imag(Xsnr(:)) ~= 0)
     warning('Xsnr is complex, taking real component');
@@ -352,7 +378,7 @@ if ~isempty(Y2) % two-channel recording, process calcium data with same source f
     opts.TypicalX = typicalX2;
     opts.MaxIterations = 15;
     LS2 = H_est\(Y2-B2);
-    S2 = fitS(Y2, H_est, B2, params.k2, Finv, params.lambda, LS2, [], problemS.lb, problemS.ub, opts);
+    S2 = fitObservedS(Y2, H_est, B2, params.k2, Finv, params.lambda, LS2, observed, problemS.lb, problemS.ub, opts);
 
     % Debias channel 2 on its own support (separate from channel 1)
     free2 = S2 >= 1e-1;
@@ -401,6 +427,46 @@ for chIx = 1:size(B_est,3)
     F0(:,:,chIx) = (H_est'*B_est(:,:,chIx))./sum(H_est.^2,1)';
 end
 
+%not estimated where the source is not observed
+unobserved = repmat(~observed, 1, 1, size(S_est_new,3));
+S_est_new(unobserved) = nan;
+dFls(unobserved) = nan;
+F0(unobserved) = nan;
+end
+
+function observed = sourceObserved(H, measured, params)
+%sources x frames: true where at least params.minCoverage (default 0.5) of a
+%source's footprint H (pixels x sources) is on pixels with a sample in that
+%frame (measured, pixels x frames). Where it is not, the fits have almost no
+%data on the source: the loader fills in missing samples and gives them a
+%thousandth of the usual weight, so the activity that the source's measured
+%pixels ask for, divided by the small share of its footprint that is on
+%them, cost next to nothing on the rest, and could grow orders of magnitude
+%above the movie.
+minCoverage = 0.5;
+if isfield(params, 'minCoverage') && ~isempty(params.minCoverage), minCoverage = params.minCoverage; end
+if all(measured(:))
+    observed = true(size(H,2), size(measured,2));
+    return
+end
+Hp = max(H, 0);
+observed = (Hp.' * double(measured)) >= minCoverage * sum(Hp, 1).';
+end
+
+function S = fitObservedS(Z, H, B, k, F, lambda, S0, observed, lb, ub, opts)
+%fitS over the entries of S (sources x time) where the source is observed,
+%with the others held at 0; the same as fitS over all of S when every entry is
+S = zeros(size(S0));
+if all(observed(:))
+    S = fitS(Z, H, B, k, F, lambda, S0, [], lb, ub, opts);
+    return
+end
+idx = find(observed);
+if isempty(idx)
+    return
+end
+opts.TypicalX = opts.TypicalX(idx);
+S(idx) = fitS(Z, H, B, k, F, lambda, S0(idx), idx, lb(idx), ub(idx), opts);
 end
 
 

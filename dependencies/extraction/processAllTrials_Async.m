@@ -36,7 +36,7 @@ for i = 1:numel(validTrials)
     disp(['Processing trial ' int2str(validTrials(i)) ' from ' fns{nLoad}])
     %Y = squeeze(CD.Yobs(:,1,:));
     Y = permute(CD.Yobs, [1 3 2]);
-    resultsFuture = extractTrial(Y,CD.Finv, sources, any(selPix,3), params, alignData{nLoad});
+    resultsFuture = extractTrial(Y,CD.Finv, sources, any(selPix,3), params, CD.measured);
     pending = nLoad;
     clear CD;
 end
@@ -60,9 +60,9 @@ try
     E.dF.events = S;
     E.dF.events(:,discard) = nan;
 
-    E.dF.denoised(:,:,1) = convn(S(:,:,1),params.k,'same');
+    E.dF.denoised(:,:,1) = denoise(S(:,:,1),params.k);
     if size(S,3)>1
-        E.dF.denoised(:,:,2) = convn(S(:,:,2),params.k2,'same');
+        E.dF.denoised(:,:,2) = denoise(S(:,:,2),params.k2);
     end
     E.dF.denoised(:,discard,:) = nan;
 
@@ -79,6 +79,16 @@ end
 %until the pool was deleted
 delete(resultsFuture.Predecessors);
 delete(resultsFuture);
+end
+
+function X = denoise(S, k)
+%convn(S, k, 'same') along time; S is NaN in the frames where a source was not
+%observed (extractTrial), and those NaNs stay where they are rather than
+%spreading over the kernel
+unobserved = isnan(S);
+S(unobserved) = 0;
+X = convn(S, k, 'same');
+X(unobserved) = nan;
 end
 
 function CD = loadTrial(dr, fn, startLine, endLine, selPix, discardFrames, alignData, meanIM, warp, trialIx, roiData, params)
@@ -344,6 +354,9 @@ if numel(discardFrames) > 1
 else
     discard = repmat(any(discardFrames(:)), 1, size(IMsel,3));
 end
+%samples the trial has (not outside the scanned field, say); the discarded
+%and aberrant samples below are filled in too, but count as measured
+measured = reshape(~isnan(IMsel(:,1,:)), size(IMsel,1), []);
 IMsel(:,:,discard) = nan;     %throw away movement frames as above
 IMsel(IMsel<-2*std(IMsel,0,3, 'omitmissing')) = nan; %throw away any aberrantly negative data
 CD.global.F(:,discard) = nan;
@@ -362,6 +375,7 @@ Finvsel(squeeze(nans(:,1,:))) = 1000*mean(Finvsel,'all', 'omitmissing');
 
 CD.Yobs = IMsel;
 CD.Finv = Finvsel;
+CD.measured = measured;
 CD.discardFrames = discard;
 end
 
