@@ -20,11 +20,11 @@ switch fnName
         params.tau2_s = 0.15;            tooltips.tau2_s = 'decay time constant of 2nd channel signal at synapses (usually spine calcium)';
         params.VIF = 1.67;                  tooltips.VIF = 'variance inflation factor for stdIM estimate';
         params.peakMethod = {'''getActImPeaks''','''wmf'''}; tooltips.peakMethod = 'how sources are seeded: ''getActImPeaks'' (maxima of the trials'' combined activity image above peakth, fit with Gaussians) or ''wmf'' (whitened matched filter of the trials'' aligned activity images; two sources are kept apart only where resolved reproducibly across halves of the trials; needs at least 4 trials, with fewer getActImPeaks is used; see findSourcesWMF)';
-        params.peakth = 8;              tooltips.peakth = 'peak identification threshold (actIM z-score)';
+        params.peakth = [];             tooltips.peakth = 'peak identification threshold (actIM z-score); empty: 3 for SLAP2, 8 otherwise';
         params.minPeakDistance = 1;     tooltips.minPeakDistance = 'minimum Chebyshev distance between peaks (pixels); 1 = adjacent peaks allowed';
         params.interTrialAlignment = {'''rigid''','''affine''','''patchwise'''}; tooltips.interTrialAlignment = 'how trials are aligned to each other: ''rigid'' (one shift per trial), ''affine'' (one affine map per trial) or ''patchwise'' (a smooth displacement field set by patches of imaged pixels; corrects affine and local deformations between trial mean images)';
         params.alignPatchPx = 1500;     tooltips.alignPatchPx = 'interTrialAlignment ''patchwise'': imaged pixels per patch (patches under half this are merged into neighbours); large enough that no single spine drives a patch, so the field cannot stretch or shrink individual spines';
-        params.wmfPeakth = 5;           tooltips.wmfPeakth = 'peakMethod ''wmf'': detection threshold (z-score of the whitened matched filter image)';
+        params.wmfPeakth = [];          tooltips.wmfPeakth = 'peakMethod ''wmf'': detection threshold (z-score of the whitened matched filter image); empty: 3 for SLAP2, 5 otherwise';
         params.wmfDip = 3;              tooltips.wmfDip = 'peakMethod ''wmf'': dip (z units) the filtered image must show between two nearby maxima to keep them as two sources (and dip/sqrt(2) in each half of the trials, when there are at least 4)';
         params.wmfDeblendth = 8;        tooltips.wmfDeblendth = 'peakMethod ''wmf'': threshold (z units of the filtered image, at least wmfPeakth) for adding a seed where the residual of the seeds'' fit still peaks, and wmfDeblendth/sqrt(2) in each half of the trials; resolves sources too close to show a dip; Inf turns it off';
         params.nWorkers = 12;           tooltips.nWorkers = 'number of parallel workers';
@@ -80,7 +80,7 @@ if nargin>1 %if the user specified parameters, add in the user parameters, use d
     end
     userFields = fieldnames(paramsIn);
     if nargin<3 || ~forceGUI
-        params = resolveDropdownDefaults(params, userFields);
+        params = resolveModalityDefaults(fnName, resolveDropdownDefaults(params, userFields));
         return
     end
 end
@@ -89,12 +89,31 @@ end
 if ~isInteractiveSession() %nobody can answer the GUI; it would wait forever
     warning('setParams:NonInteractive', ...
         'No interactive display; using default %s parameters instead of the parameter GUI.', fnName);
-    params = coerceLegacyParamNames(resolveDropdownDefaults(params, userFields));
+    params = resolveModalityDefaults(fnName, coerceLegacyParamNames(resolveDropdownDefaults(params, userFields)));
     return
 end
 paramsIn = optionsGUI(params, tooltips, fnName);
-params = coerceLegacyParamNames(paramsIn);
+params = resolveModalityDefaults(fnName, coerceLegacyParamNames(paramsIn));
 
+end
+
+function params = resolveModalityDefaults(fnName, params)
+%RESOLVEMODALITYDEFAULTS Fill parameters left empty with the default for the
+% recording's modality (params.isSLAP2). SILo's peak thresholds are lower for
+% SLAP2: on SLAP2 sessions, a sign-flip estimate of the false-discovery rate
+% across trials put both at about 3 (issue #42); other recordings keep 8 and 5.
+if ~strcmp(fnName, 'SILo') || ~isstruct(params) || ~isfield(params, 'isSLAP2')
+    return
+end
+%            field        SLAP2  otherwise
+defaults = {'peakth',     3,     8
+            'wmfPeakth',  3,     5};
+col = 3 - logical(params.isSLAP2); %2 for SLAP2, 3 otherwise
+for i = 1:size(defaults, 1)
+    if ~isfield(params, defaults{i, 1}) || isempty(params.(defaults{i, 1}))
+        params.(defaults{i, 1}) = defaults{i, col};
+    end
+end
 end
 
 function params = resolveDropdownDefaults(params, userFields)
