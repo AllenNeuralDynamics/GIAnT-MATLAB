@@ -57,6 +57,37 @@ classdef TestDebiasVariance < matlab.unittest.TestCase
             testCase.verifyNotEqual(SNRf, SNRm);
         end
 
+        function testSecondChannel(testCase)
+            % two-channel data (e.g. spine calcium in channel 2, with its
+            % slower kernel params.k2): channel 2's debias refit also holds
+            % the variance fixed; its baseline, F0 and least-squares activity
+            % do not depend on the option
+            d = testCase.Inputs;
+            prev = RandStream.setGlobalStream(RandStream('twister', 'Seed', 5));
+            restore = onCleanup(@() RandStream.setGlobalStream(prev));
+            [r, c] = find(d.selPix_p);
+            H = exp(-((r - d.sources_p.R').^2 + (c - d.sources_p.C').^2) / (2*1.4^2)); H = H ./ sum(H, 1);
+            spikes = (rand(2, size(d.Y_p, 2)) < 0.01) .* (2 + 4*rand(2, size(d.Y_p, 2))) ./ max(H, [], 1)';
+            X2 = convn(spikes, d.params.k2 / max(d.params.k2), 'same');
+            Y = cat(3, d.Y_p, d.F_inv_p .* poissrnd((0.6 + H*X2) ./ d.F_inv_p));
+            clear restore
+            p = d.params;
+            outF = cell(1, 7); outM = cell(1, 7);
+            [outF{:}] = extractSubproblem(Y, d.F_inv_p, d.sources_p, d.selPix_p, setfield(p, 'debiasVariance', 'fixed')); %#ok<SFLD>
+            [outM{:}] = extractSubproblem(Y, d.F_inv_p, d.sources_p, d.selPix_p, setfield(p, 'debiasVariance', 'model')); %#ok<SFLD>
+            [Hf, Sf, F0f, LSf, ~, ~, Bf] = outF{:};
+            [Hm, Sm, F0m, LSm, ~, ~, Bm] = outM{:};
+            testCase.assertEqual(size(Sf, 3), 2);
+            testCase.verifyEqual(Hf, Hm, 'footprints');
+            testCase.verifyEqual(Bf, Bm, 'baselines, both channels');
+            testCase.verifyEqual(F0f, F0m, 'F0, both channels');
+            testCase.verifyEqual(LSf, LSm, 'least-squares activity, both channels');
+            S2f = Sf(:, :, 2); S2m = Sm(:, :, 2);
+            testCase.assertTrue(any(S2m(:) > 0), 'channel 2 has events to refit');
+            testCase.verifyEqual(S2f ~= 0, S2m ~= 0, 'channel 2: the same entries are refit');
+            testCase.verifyLessThan(sum(S2f(:)), sum(S2m(:)), 'channel 2: smaller activity with the fixed variance');
+        end
+
         function testRejectsUnknownValue(testCase)
             d = testCase.Inputs;
             p = d.params; p.debiasVariance = 'poisson';
