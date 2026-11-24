@@ -164,6 +164,10 @@ else
     fileList = cellstr(files);
     fileList = fileList(:);
 end
+missing = fileList(~cellfun(@isfile, fileList));
+if ~isempty(missing)
+    error('subproblemRefitTest:noFiles', 'No such folder or subproblem file: %s', missing{1});
+end
 end
 
 function p = withFields(p, overrides)

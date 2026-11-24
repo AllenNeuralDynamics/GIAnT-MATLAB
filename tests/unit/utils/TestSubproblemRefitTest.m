@@ -66,6 +66,11 @@ classdef TestSubproblemRefitTest < matlab.unittest.TestCase
             testCase.verifyEqual(Rh.events.size, 0.5 * R1.events.size, 'RelTol', 1e-12, 'the same events, half as large');
         end
 
+        function testMissingFolder(testCase)
+            testCase.verifyError(@() subproblemRefitTest(fullfile(testCase.Folder, 'no_such_folder'), 'Verbose', false), ...
+                'subproblemRefitTest:noFiles');
+        end
+
         function testRejectsDuplicateVariantNames(testCase)
             testCase.verifyError(@() subproblemRefitTest(testCase.Folder, 'Verbose', false, ...
                 'Variants', {struct(), struct('lambda', 0.3)}, 'VariantNames', {'a', 'a'}), ...
