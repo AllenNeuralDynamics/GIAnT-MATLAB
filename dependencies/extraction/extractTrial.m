@@ -223,6 +223,7 @@ function [H_est,S_est_new, F0, dFls, Xsnr, errFinal, B_est] = extractSources(Y_o
 %activity (dFls); and, for developer tools (extractSubproblem), the baseline
 %B (pixels x time, channels along the 3rd dimension)
 
+debiasVarianceMode(params); %rejects an unknown value even where no event is refit
 num_channels = size(Y_obs,3);
 if num_channels>1
     Y2 = Y_obs(:,:,2);

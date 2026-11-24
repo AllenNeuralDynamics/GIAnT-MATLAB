@@ -62,6 +62,10 @@ classdef TestDebiasVariance < matlab.unittest.TestCase
             p = d.params; p.debiasVariance = 'poisson';
             testCase.verifyError(@() extractSubproblem(d.Y_p, d.F_inv_p, d.sources_p, d.selPix_p, p), ...
                 'extractTrial:debiasVariance');
+            % also in a subproblem without activity, which has nothing to refit
+            Yq = d.F_inv_p .* poissrnd(0.8 ./ d.F_inv_p);
+            testCase.verifyError(@() extractSubproblem(Yq, d.F_inv_p, d.sources_p, d.selPix_p, p), ...
+                'extractTrial:debiasVariance');
         end
     end
 end
