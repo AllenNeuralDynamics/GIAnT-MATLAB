@@ -28,7 +28,10 @@ function R = subproblemRefitTest(files, varargin)
 %   Name-value options:
 %     'Variants'     params fields that override the saved params in the
 %                    refit: a struct, a struct array or a cell array of
-%                    structs, one per variant (default: one, no overrides)
+%                    structs, one per variant (default: one, no overrides).
+%                    Fields derived from an overridden one (e.g. k and
+%                    tau_full from tau_s) are recomputed; photonScale, dXY
+%                    and selRadius are fixed by the saved subproblem
 %     'VariantNames' cell array of names for the variants (default refit1, ...)
 %     'TruthParams'  params fields that override the saved params in the
 %                    truth fit (default none)
@@ -164,6 +167,29 @@ else
     fileList = cellstr(files);
     fileList = fileList(:);
 end
+missing = fileList(~cellfun(@isfile, fileList));
+if ~isempty(missing)
+    error('subproblemRefitTest:noFiles', 'No such folder or subproblem file: %s', missing{1});
+end
+end
+
+function p = withOverrides(p, overrides)
+%the saved params with overrides; the fields extraction derives from them
+%(tau_full, k, k2, the window lengths in samples, the footprint and surround
+%filters) are recomputed when one they depend on is overridden, as SILo
+%computes them, unless the override sets them too
+fixed = intersect(fieldnames(overrides), {'photonScale', 'dXY', 'selRadius'});
+if ~isempty(fixed)
+    error('subproblemRefitTest:fixedParam', ...
+        'params.%s is fixed by the saved subproblem (its data are normalized and its pixels selected with it).', fixed{1});
+end
+p = withFields(p, overrides);
+base = {'tau_s', 'tau2_s', 'analyzeHz', 'sigma_px', 'baselineWindow_Glu_s', 'denoiseWindow_s'};
+if any(isfield(overrides, base))
+    p.tau_full = p.tau_s * p.analyzeHz;
+    p = setParamsExtractTrial(p);
+    p = withFields(p, overrides);
+end
 end
 
 function p = withFields(p, overrides)
@@ -176,7 +202,7 @@ function out = oneSubproblem(file, i, opts)
 d = load(file, 'Y_p', 'F_inv_p', 'sources_p', 'selPix_p', 'params');
 Y = double(d.Y_p(:, :, 1));
 F = double(d.F_inv_p);
-p0 = withFields(d.params, opts.TruthParams);
+p0 = withOverrides(d.params, opts.TruthParams);
 [H0, S0, F00, ~, ~, ~, B0] = extractSubproblem(Y, F, d.sources_p, d.selPix_p, p0);
 B0 = B0(:, :, 1); F00 = F00(:, :, 1);
 S0 = opts.TruthScale * S0(:, :, 1);
@@ -198,7 +224,8 @@ if ~isempty(opts.InjectSizes) && opts.InjectRate > 0
     nInj = round(opts.InjectRate * nT / hz);
     kPeak = max(p0.k);
     kc = floor(numel(p0.k)/2) + 1; %the kernel's centre: an event at t peaks at t
-    kWin = sum(p0.k(kc + (-2:L)), 'omitnan') / kPeak; %an event's mass in its window, per unit of peak
+    kIx = kc + (-2:L); kIx = kIx(kIx >= 1 & kIx <= numel(p0.k)); %the window, within the kernel's support
+    kWin = sum(p0.k(kIx)) / kPeak; %an event's mass in its window, per unit of peak
     for s = 1:nS
         [t, a] = injectionTimes(X0(s, :), ev{s}, nInj, L, opts.InjectSizes / peakH(s), kWin);
         S0(s, t) = S0(s, t) + a / kPeak;
@@ -213,7 +240,7 @@ clear restoreRng
 nV = numel(opts.Variants);
 srcRows = cell(nV, 1); evRows = cell(nV, 1);
 for v = 1:nV
-    pv = withFields(d.params, opts.Variants{v});
+    pv = withOverrides(d.params, opts.Variants{v});
     [~, S1, F01, LS1] = extractSubproblem(Z, F, d.sources_p, d.selPix_p, pv);
     X1 = convn(S1(:, :, 1), pv.k, 'same');
     F01 = F01(:, :, 1); LS1 = LS1(:, :, 1);
