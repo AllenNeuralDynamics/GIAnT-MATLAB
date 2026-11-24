@@ -18,6 +18,10 @@ params.peakMethod = lower(char(params.peakMethod));
 if ~any(strcmp(params.peakMethod, {'getactimpeaks', 'wmf'}))
     error('SILo:peakMethod', 'params.peakMethod must be ''getActImPeaks'' or ''wmf'', not ''%s''.', params.peakMethod);
 end
+params.debiasVariance = lower(char(params.debiasVariance));
+if ~any(strcmp(params.debiasVariance, {'fixed', 'model'}))
+    error('SILo:debiasVariance', 'params.debiasVariance must be ''fixed'' or ''model'', not ''%s''.', params.debiasVariance);
+end
 if ~isnumeric(params.minKineticScore) || ~isscalar(params.minKineticScore) ...
         || ~isreal(params.minKineticScore) || ~(params.minKineticScore >= 0)
     error('SILo:minKineticScore', 'params.minKineticScore must be a number of at least 0 (0 keeps every source).');

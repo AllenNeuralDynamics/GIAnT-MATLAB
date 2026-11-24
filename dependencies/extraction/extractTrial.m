@@ -389,7 +389,7 @@ if any(free(:))
     optsDebias = opts;
     optsDebias.MaxIterations = 10*params.nmfIter;
     optsDebias.TypicalX = typicalX(free);
-    x = fitS(Y_obs, H_est, B_est, params.k, Finv, lambdaDebias, x0, free_idx, problemS.lb(free), problemS.ub(free), optsDebias);
+    x = debiasS(Y_obs, H_est, B_est, params.k, Finv, lambdaDebias, x0, free_idx, problemS.lb(free), problemS.ub(free), optsDebias, params);
     S_est_new(free) = x;
 end
 
@@ -435,7 +435,7 @@ if ~isempty(Y2) % two-channel recording, process calcium data with same source f
         optsDebias = opts;
         optsDebias.MaxIterations = 10*params.nmfIter;
         optsDebias.TypicalX = typicalX2(free2);
-        x = fitS(Y2, H_est, B2, params.k2, Finv, lambdaDebias, x0, free_idx2, problemS.lb(free2), problemS.ub(free2), optsDebias);
+        x = debiasS(Y2, H_est, B2, params.k2, Finv, lambdaDebias, x0, free_idx2, problemS.lb(free2), problemS.ub(free2), optsDebias, params);
         S2(free2) = x;
     end
     
@@ -676,14 +676,49 @@ end
 
 
 
-function [x, f] = fitS(Z, H, B, k, F, lambda, x0, free_idx, lb, ub, opts)
+function x = debiasS(Z, H, B, k, F, lambda, x0, free_idx, lb, ub, opts, params)
+%DEBIASS the debias refit of S on its free entries free_idx (fitS's arguments).
+%With params.debiasVariance 'model', it is fitS's fit, whose variance term
+%F.*(T + 1) follows the model: raising T lowers the loss of every sample, so
+%with no L1 penalty to oppose it (phi = 0), found events come out about 30%
+%too large at SLAP2's photon counts (issue #56). With 'fixed' (the default,
+%also when the field is missing or empty), the variance is held at its value
+%at the refit's start, s0 = H*convn(S0, k, 'same') + B + 1, so the refit is a
+%weighted least-squares fit, minimizing sum((Z - T).^2 ./ (F.*s0)) +
+%lambda*sum(S). Re-weighting (recomputing s0 from the refit and refitting)
+%changed the result by less than 1% in the ground-truth refit test, so the
+%refit is done once. The L1 fits, the baseline and the footprints are not
+%affected.
+if strcmp(debiasVarianceMode(params), 'model')
+    x = fitS(Z, H, B, k, F, lambda, x0, free_idx, lb, ub, opts);
+    return
+end
+S = zeros(size(H, 2), size(Z, 2)); S(free_idx) = x0;
+s0 = H * convTime(S.', k).' + B + 1;
+x = fitS(Z, H, B, k, F, lambda, x0, free_idx, lb, ub, opts, s0);
+end
+
+function mode = debiasVarianceMode(params)
+%params.debiasVariance: 'fixed' (also when missing or empty) or 'model'
+mode = 'fixed';
+if isfield(params, 'debiasVariance') && ~isempty(params.debiasVariance)
+    mode = lower(char(params.debiasVariance));
+end
+if ~any(strcmp(mode, {'fixed', 'model'}))
+    error('extractTrial:debiasVariance', 'params.debiasVariance must be ''fixed'' or ''model'', not ''%s''.', mode);
+end
+end
+
+function [x, f] = fitS(Z, H, B, k, F, lambda, x0, free_idx, lb, ub, opts, s0)
 %FITS fits the activity S (sources x time) with the footprints H and baseline B
 %held fixed, minimizing
 %   f = sum((Z - T).^2 ./ (F.*(T + 1)), 'all') + lambda*sum(S(:)),  T = H*convn(S, k, 'same') + B,
 %over all of S (free_idx = []), or over the entries free_idx only, the others
 %held at 0. x0, lb and ub are S's start and bounds (on the free entries only, if
 %given). opts are the fmincon options; their MaxIterations, MaxPCGIter,
-%tolerances and TypicalX are used.
+%tolerances and TypicalX are used. With s0 (pixels x time) given and not
+%empty, the variance term T + 1 is held at s0: the loss is then
+%sum((Z - T).^2 ./ (F.*s0)) + lambda*sum(S(:)) (see debiasS).
 %
 %Every fit stops at its iteration cap, so it is made to go further per
 %iteration: the fits need steps of hundreds to thousands, while fmincon's trust
@@ -693,9 +728,12 @@ function [x, f] = fitS(Z, H, B, k, F, lambda, x0, free_idx, lb, ub, opts)
 %the Hessian's diagonal. (fmincon reads the preconditioner from the
 %undocumented Preconditioner field of optimset-style options; a release that
 %ignores it falls back to its own diagonal, and the fit still runs.)
+if nargin < 12
+    s0 = [];
+end
 szS = [size(H, 2) size(Z, 2)];
 pr = sPairs(H, szS);
-objAll = @(S) objS(S, Z, H, B, k, F, lambda, pr);
+objAll = @(S) objS(S, Z, H, B, k, F, lambda, pr, s0);
 if isempty(free_idx)
     obj = objAll;
     hess = @(Q, V) hessS(Q, V, k, pr);
@@ -735,13 +773,21 @@ pr.Sj = sparse(1:nP, pr.jj, 1, nP, p);
 pr.Slo = sparse(1:numel(pr.off), pr.ll(pr.off), 1, numel(pr.off), p);
 end
 
-function [f, gS, Q] = objS(S, Z, H, B, k, F, lambda, pr)
+function [f, gS, Q] = objS(S, Z, H, B, k, F, lambda, pr, s0)
 %fitS's loss and gradient at S; Q, its curvature summed over pixels,
 %H'*diag(coef(:,t))*H for each frame t (time x source pairs), is fmincon's
-%Hinfo, from which hessS forms the Hessian products on sources only
+%Hinfo, from which hessS forms the Hessian products on sources only. With s0
+%not empty, the variance term is held at s0 (a weighted least-squares loss)
 X = convTime(S.', k).';
 T = H * X + B;
 E = Z - T;
+if ~isempty(s0)
+    w = 1 ./ (F .* s0);
+    f = sum((E.^2) .* w, 'all') + lambda .* sum(S(:));
+    gS = convTime((H.' * (-2 .* E .* w)).', flip(k)).' + lambda;
+    Q = (2 .* w).' * pr.HH;
+    return
+end
 s = T + 1;
 f = sum( (E.^2) ./ (F .* s), 'all' ) + lambda .* sum(S(:));
 p_elem = - (2 .* E .* s + E.^2) ./ ( F .* (s.^2) );   % dL/dT
