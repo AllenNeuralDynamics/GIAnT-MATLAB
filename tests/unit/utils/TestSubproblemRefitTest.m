@@ -75,6 +75,11 @@ classdef TestSubproblemRefitTest < matlab.unittest.TestCase
             ev = @(name) R.events.refitMass(R.events.variant == name);
             testCase.verifyEqual(ev("same"), ev("saved"));
             testCase.verifyNotEqual(ev("slower"), ev("saved"));
+            % tau_full alone sets the kernel too, and wins over tau_s
+            R2 = subproblemRefitTest(testCase.Folder, 'Verbose', false, 'VariantNames', {'tauFull', 'both'}, ...
+                'Variants', {struct('tau_full', 2*d.params.tau_full), struct('tau_s', 3*d.params.tau_s, 'tau_full', 2*d.params.tau_full)});
+            testCase.verifyEqual(R2.events.refitMass(R2.events.variant == "tauFull"), ev("slower"));
+            testCase.verifyEqual(R2.events.refitMass(R2.events.variant == "both"), ev("slower"));
             testCase.verifyError(@() subproblemRefitTest(testCase.Folder, 'Verbose', false, ...
                 'Variants', struct('photonScale', 1)), 'subproblemRefitTest:fixedParam');
         end
