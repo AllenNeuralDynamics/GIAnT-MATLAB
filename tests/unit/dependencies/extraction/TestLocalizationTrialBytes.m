@@ -39,7 +39,7 @@ classdef TestLocalizationTrialBytes < matlab.unittest.TestCase
             [bytesPerTrial, channelBytes] = localizationTrialBytes(testCase.Dr, fns, numChannels);
 
             testCase.verifyEqual(channelBytes, 4*30*40*frames);
-            testCase.verifyEqual(bytesPerTrial, 6*4*30*40*300 + 2^30);
+            testCase.verifyEqual(bytesPerTrial, 6.5*4*30*40*300 + 2^30);
         end
 
         function testH5SizedByDataNotFile(testCase)
@@ -65,7 +65,7 @@ classdef TestLocalizationTrialBytes < matlab.unittest.TestCase
             [bytesPerTrial, channelBytes] = localizationTrialBytes(testCase.Dr, fns, 2);
 
             testCase.verifyEqual(channelBytes, nBytes/2);
-            testCase.verifyEqual(bytesPerTrial, 6*5000/2 + 2^30);
+            testCase.verifyEqual(bytesPerTrial, 6.5*5000/2 + 2^30);
         end
 
         function testMissingMovieErrors(testCase)
