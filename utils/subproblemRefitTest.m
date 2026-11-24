@@ -184,9 +184,11 @@ if ~isempty(fixed)
         'params.%s is fixed by the saved subproblem (its data are normalized and its pixels selected with it).', fixed{1});
 end
 p = withFields(p, overrides);
-base = {'tau_s', 'tau2_s', 'analyzeHz', 'sigma_px', 'baselineWindow_Glu_s', 'denoiseWindow_s'};
+base = {'tau_s', 'tau_full', 'tau2_s', 'analyzeHz', 'sigma_px', 'baselineWindow_Glu_s', 'denoiseWindow_s'};
 if any(isfield(overrides, base))
-    p.tau_full = p.tau_s * p.analyzeHz;
+    if ~isfield(overrides, 'tau_full') %an explicit tau_full sets the kernel
+        p.tau_full = p.tau_s * p.analyzeHz;
+    end
     p = setParamsExtractTrial(p);
     p = withFields(p, overrides);
 end
