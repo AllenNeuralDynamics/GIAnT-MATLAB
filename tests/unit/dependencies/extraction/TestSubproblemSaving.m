@@ -90,6 +90,31 @@ classdef TestSubproblemSaving < matlab.unittest.TestCase
             testCase.verifyEqual(out1, out0);
         end
 
+        function testSavesGroundTruth(testCase)
+            % with ground truth given (extractTrial's 7th argument), each
+            % subproblem's slice of it is saved too, in the solver's units
+            [Y, Finv, sources, selPix, params, GT] = TestSubproblemSaving.syntheticTrial();
+            params.saveSubproblemsDir = testCase.Folder;
+            set(0, 'DefaultFigureVisible', 'off'); % the ground-truth path plots its progress
+            testCase.addTeardown(@() set(0, 'DefaultFigureVisible', 'on'));
+            fetchOutputs(extractTrial(Y, Finv, sources, selPix, params, [], GT));
+            d = dir(fullfile(testCase.Folder, '*', 'sub_*.mat'));
+            testCase.assertNumElements(d, 2);
+            selIdxs = zeros(size(selPix)); selIdxs(selPix) = 1:nnz(selPix);
+            ps = params.photonScale;
+            for k = 1:numel(d)
+                s = load(fullfile(d(k).folder, d(k).name));
+                full = false(size(selPix));
+                full(s.rowSupport(1):s.rowSupport(2), s.colSupport(1):s.colSupport(2)) = s.selPix_p;
+                rows = selIdxs(full);
+                testCase.verifyEqual(s.GTp.S, GT.S(s.srcIdx, :) / ps, 'events, photon-normalized');
+                testCase.verifyEqual(s.GTp.X, GT.X(s.srcIdx, :) / ps);
+                testCase.verifyEqual(s.GTp.B, GT.B(rows, :) / ps, 'baseline at the subproblem''s pixels');
+                testCase.verifyEqual(s.GTp.H, GT.H(rows, s.srcIdx), 'footprints at its pixels and sources');
+                testCase.verifyEqual(s.GTp.Hs, GT.Hs(rows, s.srcIdx));
+            end
+        end
+
         function testUnnamedTrialsDoNotCollide(testCase)
             % without params.subproblemSource (extractTrial called directly),
             % each call gets a folder of its own
@@ -106,7 +131,7 @@ classdef TestSubproblemSaving < matlab.unittest.TestCase
     end
 
     methods (Static)
-        function [Y, Finv, sources, selPix, params] = syntheticTrial()
+        function [Y, Finv, sources, selPix, params, GT] = syntheticTrial()
             % three sources in two separate groups, low photon counts (about
             % one photon per pixel and sample, as on SLAP2) and sparse events
             prev = RandStream.setGlobalStream(RandStream('twister', 'Seed', 7)); % poissrnd draws from the global stream
@@ -131,6 +156,9 @@ classdef TestSubproblemSaving < matlab.unittest.TestCase
             Finv = 0.77*ones(numel(r), nT);
             T = B + H*X;
             Y = params.photonScale * Finv .* poissrnd(T ./ Finv); % counts; extractTrial divides by photonScale
+            % the ground truth, in counts as extractTrial takes it
+            ps = params.photonScale;
+            GT = struct('S', ps * spikes / max(params.k), 'X', ps * X, 'B', ps * B, 'Y', Y, 'H', H, 'Hs', H);
         end
     end
 end
