@@ -46,7 +46,14 @@ function R = subproblemRefitTest(files, varargin)
 %                    rng(Seed + i); the generator's state is restored after
 %                    (default 0)
 %     'SizeEdges'    edges of the event-size bins (default [0 0.25 0.5 1 2 4 8 Inf])
-%     'UseParallel'  fit the subproblems in a parfor loop (default false)
+%     'UseParallel'  fit the subproblems in a parfor loop (default false).
+%                    Results differ slightly between the two settings, with
+%                    the same Seed: a pool worker computes in a single thread
+%                    and the client in several, so the fits (and with them
+%                    the simulated data) differ in floating-point order.
+%                    Compare variants within one call, which refits them all
+%                    on the same data; production solves subproblems on
+%                    workers
 %     'Verbose'      print the report (default true)
 %
 %   R has fields
