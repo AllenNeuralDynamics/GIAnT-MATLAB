@@ -36,7 +36,12 @@ for i = 1:numel(validTrials)
     disp(['Processing trial ' int2str(validTrials(i)) ' from ' fns{nLoad}])
     %Y = squeeze(CD.Yobs(:,1,:));
     Y = permute(CD.Yobs, [1 3 2]);
-    resultsFuture = extractTrial(Y,CD.Finv, sources, any(selPix,3), params, alignData{nLoad});
+    trialParams = params;
+    if isfield(params, 'saveSubproblemsDir') && ~isempty(params.saveSubproblemsDir) %name the trial's saved subproblems
+        trialParams.subproblemSource.trial = nLoad;
+        trialParams.subproblemSource.file = fns{nLoad};
+    end
+    resultsFuture = extractTrial(Y,CD.Finv, sources, any(selPix,3), trialParams, alignData{nLoad});
     pending = nLoad;
     clear CD;
 end

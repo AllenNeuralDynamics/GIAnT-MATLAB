@@ -386,6 +386,10 @@ for DMDix = nDMDs:-1:1
     if any(keepSources)
         stageTimer = tic;
         fns = trialTable.source_extraction.fn_raw(DMDix,:);
+        extractParams = params;
+        if isfield(params, 'saveSubproblemsDir') && ~isempty(params.saveSubproblemsDir) %name the saved subproblems by imaging path
+            extractParams.subproblemSource.path = DMDix;
+        end
         if params.isSLAP2
             if isfield(trialTable, 'datadr') && ~isempty(trialTable.datadr)
                 trialDataDr = trialTable.datadr;
@@ -394,11 +398,11 @@ for DMDix = nDMDs:-1:1
             end
             fls = trialTable.slap2_info.first_line(DMDix,:);
             els = trialTable.slap2_info.last_line(DMDix,:);
-            E = processAllTrials_Async(trialDataDr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, params);
+            E = processAllTrials_Async(trialDataDr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, extractParams);
         else % non-SLAP2 (registered movies live under motion_correction)
             fls = cell(1,numel(fns));
             els = cell(1,numel(fns));
-            E = processAllTrials_Async(mocodr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, params);
+            E = processAllTrials_Async(mocodr, fns, fls, els, selPix, sources, discardFrames, alignData, meanAligned, warp, roiData, validTrials, extractParams);
         end
         %score each source's transient kinetics; with minKineticScore > 0,
         %remove sources whose transients are faster than the indicator.
