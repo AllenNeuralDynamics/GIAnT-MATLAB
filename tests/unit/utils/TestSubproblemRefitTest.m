@@ -66,6 +66,27 @@ classdef TestSubproblemRefitTest < matlab.unittest.TestCase
             testCase.verifyEqual(Rh.events.size, 0.5 * R1.events.size, 'RelTol', 1e-12, 'the same events, half as large');
         end
 
+        function testOverridesUpdateDerivedParams(testCase)
+            % a base parameter's derived fields follow it: tau_s at its
+            % saved value changes nothing, another value changes the kernel
+            d = load(fullfile(testCase.Folder, 'path1_trial001', 'sub_001.mat'), 'params');
+            R = subproblemRefitTest(testCase.Folder, 'Verbose', false, 'VariantNames', {'saved', 'same', 'slower'}, ...
+                'Variants', {struct(), struct('tau_s', d.params.tau_s), struct('tau_s', 2*d.params.tau_s)});
+            ev = @(name) R.events.refitMass(R.events.variant == name);
+            testCase.verifyEqual(ev("same"), ev("saved"));
+            testCase.verifyNotEqual(ev("slower"), ev("saved"));
+            testCase.verifyError(@() subproblemRefitTest(testCase.Folder, 'Verbose', false, ...
+                'Variants', struct('photonScale', 1)), 'subproblemRefitTest:fixedParam');
+        end
+
+        function testInjectionWithShortKernel(testCase)
+            % at a low frame rate the kernel is three samples long (analyzeHz
+            % 5 with tau_s 24 ms), shorter than an event's window
+            R = subproblemRefitTest(testCase.Folder, 'Verbose', false, 'InjectSizes', 2, ...
+                'TruthParams', struct('analyzeHz', 5), 'Variants', struct('analyzeHz', 5));
+            testCase.verifyTrue(any(R.events.injected));
+        end
+
         function testMissingFolder(testCase)
             testCase.verifyError(@() subproblemRefitTest(fullfile(testCase.Folder, 'no_such_folder'), 'Verbose', false), ...
                 'subproblemRefitTest:noFiles');
