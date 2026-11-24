@@ -262,6 +262,13 @@ classdef TestSILo < matlab.unittest.TestCase
                 'SILo:debiasVariance');
         end
 
+        function testEmptyDebiasVarianceMeansFixed(testCase)
+            testCase.writeDataset(1);
+
+            params = testCase.runSILo(testCase.Dr, struct('debiasVariance', []));
+            testCase.verifyEqual(params.debiasVariance, 'fixed');
+        end
+
         function testWritesSummariesAndTrialTable(testCase)
             testCase.writeDataset(1);
 
