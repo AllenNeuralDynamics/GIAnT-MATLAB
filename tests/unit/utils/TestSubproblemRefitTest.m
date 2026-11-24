@@ -66,6 +66,27 @@ classdef TestSubproblemRefitTest < matlab.unittest.TestCase
             testCase.verifyEqual(Rh.events.size, 0.5 * R1.events.size, 'RelTol', 1e-12, 'the same events, half as large');
         end
 
+        function testRejectsDuplicateVariantNames(testCase)
+            testCase.verifyError(@() subproblemRefitTest(testCase.Folder, 'Verbose', false, ...
+                'Variants', {struct(), struct('lambda', 0.3)}, 'VariantNames', {'a', 'a'}), ...
+                'subproblemRefitTest:variantNames');
+        end
+
+        function testNoEvents(testCase)
+            % no true activity: empty tables with their columns, and a report
+            R = subproblemRefitTest(testCase.Folder, 'Verbose', true, 'TruthScale', 0);
+            testCase.verifyEqual(height(R.events), 0);
+            testCase.verifyEqual(height(R.bySize), 0);
+            testCase.verifyTrue(all(ismember({'variant', 'injected', 'n', 'recoveredFound'}, R.bySize.Properties.VariableNames)));
+            testCase.verifyTrue(isnan(R.summary.pooled));
+            % injected events alone, far below the detection threshold: none
+            % is found, and recovery of found events is undefined (NaN), not 0
+            R = subproblemRefitTest(testCase.Folder, 'Verbose', false, 'TruthScale', 0, 'InjectSizes', 0.02, 'InjectRate', 1);
+            testCase.assertNotEmpty(R.bySize);
+            testCase.verifyEqual(R.bySize.shareFound, 0);
+            testCase.verifyTrue(isnan(R.bySize.recoveredFound));
+        end
+
         function testInjectedEvents(testCase)
             sizes = [0.5 2];
             R = subproblemRefitTest(testCase.Folder, 'Verbose', false, 'InjectSizes', sizes, 'InjectRate', 1);
