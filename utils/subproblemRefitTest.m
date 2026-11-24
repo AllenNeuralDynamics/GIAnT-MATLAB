@@ -144,6 +144,9 @@ names = cellstr(names);
 if numel(names) ~= numel(v)
     error('subproblemRefitTest:variantNames', 'Give one name per variant.');
 end
+if numel(unique(names)) < numel(names) %the names group the results
+    error('subproblemRefitTest:variantNames', 'Give each variant a name of its own.');
+end
 opts.VariantNames = names(:)';
 opts.UseParallel = logical(opts.UseParallel);
 opts.Verbose = logical(opts.Verbose);
@@ -315,16 +318,17 @@ for v = 1:numel(names)
             if ~any(m)
                 continue
             end
-            f = m & e.found;
+            f = m & e.found; %recoveredFound is NaN when none is found (0/0)
             rows{end+1, 1} = table(string(names{v}), injected, edges(b), edges(b+1), nnz(m), nnz(f) / nnz(m), ...
-                sum(e.refitMass(m)) / sum(e.trueMass(m)), sum(e.refitMass(f)) / max(sum(e.trueMass(f)), eps), ...
+                sum(e.refitMass(m)) / sum(e.trueMass(m)), sum(e.refitMass(f)) / sum(e.trueMass(f)), ...
                 'VariableNames', {'variant', 'injected', 'sizeFrom', 'sizeTo', 'n', 'shareFound', ...
                 'recoveredAll', 'recoveredFound'}); %#ok<AGROW>
         end
     end
 end
-if isempty(rows)
-    B = table();
+if isempty(rows) %no events: an empty table with the same columns
+    B = table('Size', [0 8], 'VariableTypes', {'string', 'logical', 'double', 'double', 'double', 'double', 'double', 'double'}, ...
+        'VariableNames', {'variant', 'injected', 'sizeFrom', 'sizeTo', 'n', 'shareFound', 'recoveredAll', 'recoveredFound'});
 else
     B = vertcat(rows{:});
 end
