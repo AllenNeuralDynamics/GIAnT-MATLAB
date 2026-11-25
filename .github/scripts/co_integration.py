@@ -122,7 +122,7 @@ def main() -> int:
         if not o.ok:
             log = read_result(client, comp_id, args.log_file) or "log unavailable"
             tail = "<br>".join(table_cell(line) for line in log.splitlines()[-LOG_TAIL_LINES:])
-            error += f"<br><br>Capsule log (tail):<pre>{tail}</pre>"
+            error += f"<br><br><details><summary>Capsule log (tail)</summary><pre>{tail}</pre></details>"
 
         results_rows.append(f"| {result} | [{comp_id}]({run_url}) | {error} |")
 
