@@ -110,10 +110,13 @@ def main() -> int:
         "| -- | -- | -- |",
         f"| {len(outcomes)} | {passed} | {len(failures)} |",
     ])
-    results_rows = ["| Result | Dataset | Error Message |", "| --- | --- | --- |"]
+    results_rows = ["| Result | Computation | Dataset | Error Message |", "| --- | --- | --- | --- |"]
 
     for o in outcomes:
         comp_id = o.computation_ids[-1]
+        computation = client.computations.get_computation(computation_id=comp_id)
+        dataset = computation.data_assets[0] if computation.data_assets else ""
+        dataset_id = dataset.id if dataset else ""
 
         run_url = f"{CO_DOMAIN}/capsule/{slug}/tree?results={comp_id}_computation"
         result = "✅" if o.ok else "❌"
@@ -124,7 +127,7 @@ def main() -> int:
             tail = "<br>".join(table_cell(line) for line in log.splitlines()[-LOG_TAIL_LINES:])
             error += f"<br><br><details><summary>Capsule log (tail)</summary><pre>{tail}</pre></details>"
 
-        results_rows.append(f"| {result} | [{comp_id}]({run_url}) | {error} |")
+        results_rows.append(f"| {result} | [{comp_id}]({run_url}) | {dataset_id} | {error} |")
 
     results_table = "\n".join(results_rows)
     text = "\n\n".join([header, summary_table, "### Test Results", results_table])
