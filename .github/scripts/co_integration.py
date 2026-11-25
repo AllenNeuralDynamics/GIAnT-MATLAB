@@ -5,10 +5,11 @@ Contract with the capsule:
 - It accepts the commit under test as a named parameter (``--commit-param``).
 - It exits 0 when every check passes and nonzero when a check fails or cannot run.
 
-The check passes when every capsule run completes with exit code 0. A failed, cancelled, or timed-out run fails the check and cancels the runs still in flight.
+The check passes when every capsule run completes with exit code 0. If ``--cancel-on-failure`` is set, a failed, cancelled, or timed-out run fails the check and cancels the runs still in flight.
 """
 
 import argparse
+import html
 import json
 import os
 import sys
@@ -22,7 +23,6 @@ from codeocean.error import Error as CodeOceanError
 
 CO_DOMAIN = "https://codeocean.allenneuraldynamics.org"
 POLL_SECONDS = 60
-LOG_FILE = "output"
 LOG_TAIL_LINES = 40
 
 
@@ -34,6 +34,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-asset-ids", type=json.loads, default=[], help="JSON array of data asset ids.")
     parser.add_argument("--commit-param", default="test_commit", help="Capsule parameter that receives the commit.")
     parser.add_argument("--timeout-minutes", type=float, default=330, help="Maximum run time to wait.")
+    parser.add_argument("--cancel-on-failure", action='store_true', help="Cancel remaining runs on failure.")
+    parser.add_argument("--log-file", default="output", help="File to write logs to.")
     return parser.parse_args()
 
 
@@ -50,10 +52,17 @@ def read_result(client: CodeOcean, computation_id: str, path: str) -> str | None
 def start_runs(client: CodeOcean, args: argparse.Namespace) -> list[Outcome]:
     """Start one capsule run per data asset and wait for every outcome."""
     jobs = []
+    if not args.data_asset_ids:
+        params = RunParams(
+            capsule_id=args.capsule_id,
+            named_parameters=[NamedRunParam(param_name=args.commit_param, value=args.commit)],
+        )
+        jobs.append(Job(label="Run", run_params=params, key=job_key(params)))
+
     for asset_id in args.data_asset_ids:
         params = RunParams(
             capsule_id=args.capsule_id,
-            data_assets=[DataAssetsRunParam(id=asset_id, mount="data")],
+            data_assets=[DataAssetsRunParam(id=asset_id, mount=asset_id)],
             named_parameters=[NamedRunParam(param_name=args.commit_param, value=args.commit)],
         )
         jobs.append(Job(label=asset_id, run_params=params, key=job_key(params)))
@@ -65,7 +74,7 @@ def start_runs(client: CodeOcean, args: argparse.Namespace) -> list[Outcome]:
         start_retries=3,
         poll_interval_s=POLL_SECONDS,
         timeout_s=args.timeout_minutes * 60,
-        cancel_on_failure=True,
+        cancel_on_failure=args.cancel_on_failure,
         on_outcome=print,
     )
 
@@ -78,6 +87,11 @@ def write_step_summary(text: str) -> None:
             f.write(text + "\n")
 
 
+def table_cell(text: str) -> str:
+    """Escape text so it stays inside a single markdown table cell."""
+    return html.escape(text).replace("|", "&#124;").replace("\n", "<br>")
+
+
 def main() -> int:
     """Run one capsule per data asset at the commit, report each outcome, and return a process exit code."""
     args = parse_args()
@@ -86,30 +100,37 @@ def main() -> int:
 
     outcomes = start_runs(client, args)
 
-    tests_failed = False
-    sections = []
-    for outcome in outcomes:
-        comp_id = outcome.computation_ids[-1]
-
-        lines = [f"### {outcome.job.label}: {'passed' if outcome.ok else 'failed'}"]
-        run_url = f"{CO_DOMAIN}/capsule/{slug}/tree?results={comp_id}_computation"
-        lines.append(f"- Run: [{comp_id}]({run_url})")
-
-        if not outcome.ok:
-            tests_failed = True
-            lines.append(f"- Failure: job {outcome.status}: {outcome.failure}: {outcome.error}")
-            log = read_result(client, comp_id, LOG_FILE) or "log unavailable"
-            lines += ["", "Capsule log (tail):", "```", *log.splitlines()[-LOG_TAIL_LINES:], "```"]
-
-        sections.append("\n".join(lines))
-
+    failures = [o for o in outcomes if not o.ok]
     header = "\n".join(
-        [f"## Code Ocean integration check {'failed' if tests_failed else 'passed'}", f"- Commit: `{args.commit}`"]
+        [f"## Integration Test Results {'failed' if failures else 'passed'}", f"- Commit: `{args.commit}`"]
     )
-    text = "\n\n".join([header, *sections])
+    passed = len(outcomes) - len(failures)
+    summary_table = "\n".join([
+        "| Total Tests | Passed ✅ | Failed ❌ |",
+        "| -- | -- | -- |",
+        f"| {len(outcomes)} | {passed} | {len(failures)} |",
+    ])
+    results_rows = ["| Result | Computation | Dataset | Error Message |", "| --- | --- | --- | --- |"]
+
+    for o in outcomes:
+        comp_id = o.computation_ids[-1]
+
+        run_url = f"{CO_DOMAIN}/capsule/{slug}/tree?results={comp_id}_computation"
+        result = "✅" if o.ok else "❌"
+        error = "" if o.ok else table_cell(f"{o.status}: {o.error}")
+
+        if not o.ok:
+            log = read_result(client, comp_id, args.log_file) or "log unavailable"
+            tail = "<br>".join(table_cell(line) for line in log.splitlines()[-LOG_TAIL_LINES:])
+            error += f"<br><br><details><summary>Capsule log (tail)</summary><pre>{tail}</pre></details>"
+
+        results_rows.append(f"| {result} | [{comp_id}]({run_url}) | {o.job.label} | {error} |")
+
+    results_table = "\n".join(results_rows)
+    text = "\n\n".join([header, summary_table, "### Test Results", results_table])
     print(text)
     write_step_summary(text)
-    return 1 if tests_failed else 0
+    return 1 if failures else 0
 
 
 if __name__ == "__main__":
