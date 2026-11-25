@@ -34,7 +34,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--data-asset-ids", type=json.loads, default=[], help="JSON array of data asset ids.")
     parser.add_argument("--commit-param", default="test_commit", help="Capsule parameter that receives the commit.")
     parser.add_argument("--timeout-minutes", type=float, default=330, help="Maximum run time to wait.")
-    parser.add_argument("--cancel-on-failure", type=bool, default=True, help="Cancel remaining runs on failure.")
+    parser.add_argument("--cancel-on-failure", action='store_true', help="Cancel remaining runs on failure.")
     parser.add_argument("--log-file", default="output", help="File to write logs to.")
     return parser.parse_args()
 
@@ -102,7 +102,7 @@ def main() -> int:
 
     failures = [o for o in outcomes if not o.ok]
     header = "\n".join(
-        [f"## GIAnT-MATLAB Integration Test Results {'failed' if failures else 'passed'}", f"- Commit: `{args.commit}`"]
+        [f"## Integration Test Results {'failed' if failures else 'passed'}", f"- Commit: `{args.commit}`"]
     )
     passed = len(outcomes) - len(failures)
     summary_table = "\n".join([
@@ -114,9 +114,6 @@ def main() -> int:
 
     for o in outcomes:
         comp_id = o.computation_ids[-1]
-        computation = client.computations.get_computation(computation_id=comp_id)
-        dataset = computation.data_assets[0] if computation.data_assets else ""
-        dataset_id = dataset.id if dataset else ""
 
         run_url = f"{CO_DOMAIN}/capsule/{slug}/tree?results={comp_id}_computation"
         result = "✅" if o.ok else "❌"
@@ -127,7 +124,7 @@ def main() -> int:
             tail = "<br>".join(table_cell(line) for line in log.splitlines()[-LOG_TAIL_LINES:])
             error += f"<br><br><details><summary>Capsule log (tail)</summary><pre>{tail}</pre></details>"
 
-        results_rows.append(f"| {result} | [{comp_id}]({run_url}) | {dataset_id} | {error} |")
+        results_rows.append(f"| {result} | [{comp_id}]({run_url}) | {o.job.label} | {error} |")
 
     results_table = "\n".join(results_rows)
     text = "\n\n".join([header, summary_table, "### Test Results", results_table])
