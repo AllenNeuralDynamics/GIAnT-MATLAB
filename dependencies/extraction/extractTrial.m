@@ -1,4 +1,13 @@
 function varargout = extractTrial(Y_obs,Finv, sources, selPix, params, alignData, GT)
+%With params.saveSubproblemsDir set (developer option, off when empty), the
+%inputs of every subproblem are saved there before it is solved (see
+%saveSubproblem). extractTrial('subproblemSolver') returns a handle to the
+%subproblem solver, for extractSubproblem.
+
+if nargin == 1 && (ischar(Y_obs) || isstring(Y_obs)) && strcmp(Y_obs, 'subproblemSolver')
+    varargout = {@extractSources};
+    return
+end
 
 Y_obs = double(Y_obs);
 Finv = double(Finv);
@@ -44,6 +53,12 @@ else
     doParallel = false;
 end
 
+saveDir = subproblemSaveDir(params);
+if ~isempty(saveDir)
+    saveDir = subproblemFolder(params, saveDir);
+    saveTrialInputs(saveDir, sources, selPix, params, nProblems);
+end
+
 sourceList = cell(1,nProblems); pxList_p = cell(1,nProblems);
 for problemIx = 1:nProblems %9
     disp(['Solving subproblem ' int2str(problemIx) ' of ' int2str(CC.NumObjects)]);
@@ -69,13 +84,21 @@ for problemIx = 1:nProblems %9
     sources_p.C = sources_p.C-colSupport(1)+1;
     selPix_p = selPix_p(rowSupport(1):rowSupport(2), colSupport(1):colSupport(2));
 
+    GTp = [];
     if nargin>6 %Ground truth supplied
         GTp.S = GT.S(selSources,:); % spikes,sources x time
         GTp.X = GT.X(selSources,:); % S convolved with kernel
         GTp.B = GT.B(selIdxs(pxList_p{problemIx}),:); % background
         GTp.H = GT.H(selIdxs(pxList_p{problemIx}), selSources); % source images; pixels x sources
         GTp.Hs = GT.Hs(selIdxs(pxList_p{problemIx}), selSources); % superres source images; pixels x sources
+    end
 
+    if ~isempty(saveDir)
+        saveSubproblem(saveDir, problemIx, nProblems, Y_p, F_inv_p, sources_p, selPix_p, params, ...
+            rowSupport, colSupport, sourceList{problemIx}, sources, GTp);
+    end
+
+    if nargin>6 %Ground truth supplied
         if doParallel
             analysisFutures(problemIx) = parfeval(@extractSources, 6, Y_p, F_inv_p, sources_p, selPix_p, params, GTp);
         else
@@ -104,6 +127,53 @@ if doParallel
 else
     varargout = {H,S,LS,F0,SNR}; %#ok<USENS>
 end
+end
+
+function d = subproblemFolder(params, root)
+%the folder for this trial's saved subproblems, inside params.saveSubproblemsDir:
+%named by the trial's imaging path, index and file (params.subproblemSource, which
+%SILo and processAllTrials_Async set when saving), so that the trials of a run
+%do not overwrite each other, or by a unique name if they are not given
+parts = {};
+if isfield(params, 'subproblemSource') && isstruct(params.subproblemSource)
+    src = params.subproblemSource;
+    if isfield(src, 'path') && ~isempty(src.path), parts{end+1} = sprintf('path%d', src.path); end
+    if isfield(src, 'trial') && ~isempty(src.trial), parts{end+1} = sprintf('trial%03d', src.trial); end
+    if isfield(src, 'file') && ~isempty(src.file)
+        [~, base] = fileparts(char(src.file));
+        parts{end+1} = regexprep(base, '[^\w-]', '_');
+    end
+end
+if isempty(parts)
+    [~, parts{1}] = fileparts(tempname); %unique, and leaves the random number generator alone
+end
+d = fullfile(root, strjoin(parts, '_'));
+if ~exist(d, 'dir')
+    mkdir(d);
+end
+end
+
+function saveTrialInputs(d, sources, selPix, params, nProblems) %#ok<INUSD>
+%what the subproblems of this trial share: the trial's sources and pixel map
+save(fullfile(d, 'trial.mat'), 'sources', 'selPix', 'params', 'nProblems', '-v7.3');
+end
+
+function saveSubproblem(d, problemIx, nProblems, Y_p, F_inv_p, sources_p, selPix_p, params, ...
+    rowSupport, colSupport, srcIdx, sources, GTp) %#ok<INUSD>
+%saves the inputs of one subproblem exactly as extractSources receives them
+%(Y_p is the trial's data divided by params.photonScale), so that
+%extractSubproblem(Y_p, F_inv_p, sources_p, selPix_p, params) reproduces its
+%fit. sources_p and selPix_p are cropped to rows rowSupport(1):rowSupport(2)
+%and columns colSupport(1):colSupport(2) of the trial's map; srcIdx are the
+%subproblem's sources in the trial's source list (srcR, srcC their positions
+%in the trial's map). GTp, when not empty, is the subproblem's ground truth.
+srcR = sources.R(srcIdx); srcC = sources.C(srcIdx); %#ok<NASGU>
+vars = {'Y_p', 'F_inv_p', 'sources_p', 'selPix_p', 'params', 'rowSupport', 'colSupport', ...
+    'srcIdx', 'srcR', 'srcC', 'problemIx', 'nProblems'};
+if ~isempty(GTp)
+    vars{end+1} = 'GTp';
+end
+save(fullfile(d, sprintf('sub_%03d.mat', problemIx)), vars{:}, '-v7.3');
 end
 
 function [H,S,LS,F0,SNR] = assembleResults(analysisFutures, pxList_p, selIdxs, sourceList, nSources, nTimepoints, photonScale)
@@ -139,7 +209,7 @@ end
 
 
 
-function [H_est,S_est_new, F0, dFls, Xsnr, errFinal] = extractSources(Y_obs, Finv, sources, selPix, params, GT)
+function [H_est,S_est_new, F0, dFls, Xsnr, errFinal, B_est] = extractSources(Y_obs, Finv, sources, selPix, params, GT)
 %performs source extraction by alternating coordinate optimization on the
 %footprints (H,Hs), baseline (B), and source activities (S,X), in a constrained NMF framework
 
@@ -150,7 +220,8 @@ function [H_est,S_est_new, F0, dFls, Xsnr, errFinal] = extractSources(Y_obs, Fin
 
 %outputs the source footprints (H), the superresolution spikes (S), the
 %footprint-weighted baseline of each source (F0), and the least-squares
-%activity (dFls)
+%activity (dFls); and, for developer tools (extractSubproblem), the baseline
+%B (pixels x time, channels along the 3rd dimension)
 
 num_channels = size(Y_obs,3);
 if num_channels>1
