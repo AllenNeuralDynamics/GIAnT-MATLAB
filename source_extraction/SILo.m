@@ -14,6 +14,7 @@ params.interTrialAlignment = lower(char(params.interTrialAlignment));
 if ~any(strcmp(params.interTrialAlignment, {'rigid', 'affine', 'patchwise'}))
     error('SILo:interTrialAlignment', 'params.interTrialAlignment must be ''rigid'', ''affine'' or ''patchwise'', not ''%s''.', params.interTrialAlignment);
 end
+subproblemSaveDir(params); %an invalid value fails here, not after localization
 params.peakMethod = lower(char(params.peakMethod));
 if ~any(strcmp(params.peakMethod, {'getactimpeaks', 'wmf'}))
     error('SILo:peakMethod', 'params.peakMethod must be ''getActImPeaks'' or ''wmf'', not ''%s''.', params.peakMethod);
@@ -387,7 +388,7 @@ for DMDix = nDMDs:-1:1
         stageTimer = tic;
         fns = trialTable.source_extraction.fn_raw(DMDix,:);
         extractParams = params;
-        if isfield(params, 'saveSubproblemsDir') && ~isempty(params.saveSubproblemsDir) %name the saved subproblems by imaging path
+        if ~isempty(subproblemSaveDir(params)) %name the saved subproblems by imaging path
             extractParams.subproblemSource.path = DMDix;
         end
         if params.isSLAP2

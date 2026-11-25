@@ -37,7 +37,7 @@ for i = 1:numel(validTrials)
     %Y = squeeze(CD.Yobs(:,1,:));
     Y = permute(CD.Yobs, [1 3 2]);
     trialParams = params;
-    if isfield(params, 'saveSubproblemsDir') && ~isempty(params.saveSubproblemsDir) %name the trial's saved subproblems
+    if ~isempty(subproblemSaveDir(params)) %name the trial's saved subproblems
         trialParams.subproblemSource.trial = nLoad;
         trialParams.subproblemSource.file = fns{nLoad};
     end

@@ -36,6 +36,18 @@ classdef TestSubproblemSaving < matlab.unittest.TestCase
         function testOffByDefault(testCase)
             p = setParams('SILo', struct('isSLAP2', true));
             testCase.verifyEqual(p.saveSubproblemsDir, '');
+            testCase.verifyEqual(subproblemSaveDir(p), '');
+        end
+
+        function testSaveDirValues(testCase)
+            % off: missing, empty, blank, false or 0 (e.g. from JSON); text: on
+            for v = {'', "", '  ', [], false, 0}
+                testCase.verifyEqual(subproblemSaveDir(struct('saveSubproblemsDir', v)), '');
+            end
+            testCase.verifyEqual(subproblemSaveDir(struct()), '');
+            testCase.verifyEqual(subproblemSaveDir(struct('saveSubproblemsDir', " D:\dumps ")), 'D:\dumps');
+            testCase.verifyError(@() subproblemSaveDir(struct('saveSubproblemsDir', true)), 'extractTrial:saveSubproblemsDir');
+            testCase.verifyError(@() subproblemSaveDir(struct('saveSubproblemsDir', 3)), 'extractTrial:saveSubproblemsDir');
         end
 
         function testSavedInputsReproduceTheTrial(testCase)
