@@ -27,10 +27,9 @@ env:
   STATUS_CONTEXT: Code Ocean integration
 
 jobs:
-  code-ocean:
+  prepare_run:
     if: github.event_name == 'workflow_dispatch' || github.event.label.name == 'run-integration-test'
     runs-on: ubuntu-latest
-    timeout-minutes: 360
     env:
       TEST_COMMIT: ${{ github.event.pull_request.head.sha || inputs.test_commit }}
       GH_TOKEN: ${{ github.token }}
@@ -45,32 +44,31 @@ jobs:
           gh api "repos/${{ github.repository }}/statuses/$TEST_COMMIT"
           -f state=pending -f context="$STATUS_CONTEXT" -f target_url="$RUN_URL"
           -f description="Running in Code Ocean"
+  
+  code_ocean:
+    name: Run CO Workflow
+    needs: prepare_run
+    uses: AllenNeuralDynamics/.github/.github/workflows/run-co-integration.yml@feat/co-integration-test-workflow
+    with:
+      test_commit:  ${{ github.event.pull_request.head.sha || inputs.test_commit }}
+      co_capsule_id: ${{ vars.CO_INTEGRATION_TEST_CAPSULE_ID }}
+      co_data_asset_ids: ${{ vars.CO_TEST_DATA_ASSET_IDS }}
+      cancel_on_failure: true
+    secrets:
+      co_token: ${{ secrets.CODEOCEAN_TOKEN }}
 
-      # pull_request_target checks out the base branch, so pull-request code never reaches the runner.
-      - name: Check out scripts
-        uses: actions/checkout@v4
-        with:
-          sparse-checkout: .github/scripts
-
-      - uses: astral-sh/setup-uv@v6
-
-      - name: Run integration tests
-        env:
-          CODEOCEAN_TOKEN: ${{ secrets.CODEOCEAN_TOKEN }}
-          DATA_ASSET_IDS: ${{ vars.CO_TEST_DATA_ASSET_IDS }}
-        run: >
-          uv run --no-project --with codeocean==0.17.0
-          --with aind-codeocean-dispatch==0.6.0
-          .github/scripts/co_integration.py
-          --capsule-id "${{ vars.CO_INTEGRATION_TEST_CAPSULE_ID }}"
-          --data-asset-ids "$DATA_ASSET_IDS"
-          --commit "$TEST_COMMIT"
-          --cancel-on-failure
-
+  post_run:
+    name: Set final status
+    needs: [prepare_run, code_ocean]
+    if: always() && needs.prepare_run.result != 'skipped'
+    runs-on: ubuntu-latest
+    env:
+      JOB_STATUS: ${{ needs.code_ocean.result }}
+      GH_TOKEN: ${{ github.token }}
+      TEST_COMMIT: ${{ github.event.pull_request.head.sha || inputs.test_commit }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
       - name: Set final status
-        if: always()
-        env:
-          JOB_STATUS: ${{ job.status }}
         run: |
           case "$JOB_STATUS" in
             success) state=success; description="Passed in Code Ocean" ;;
