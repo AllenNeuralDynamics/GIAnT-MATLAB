@@ -9,6 +9,7 @@ The check passes when every capsule run completes with exit code 0. A failed, ca
 """
 
 import argparse
+import html
 import json
 import os
 import sys
@@ -86,6 +87,11 @@ def write_step_summary(text: str) -> None:
             f.write(text + "\n")
 
 
+def table_cell(text: str) -> str:
+    """Escape text so it stays inside a single markdown table cell."""
+    return html.escape(text).replace("|", "&#124;").replace("\n", "<br>")
+
+
 def main() -> int:
     """Run one capsule per data asset at the commit, report each outcome, and return a process exit code."""
     args = parse_args()
@@ -111,11 +117,12 @@ def main() -> int:
 
         run_url = f"{CO_DOMAIN}/capsule/{slug}/tree?results={comp_id}_computation"
         result = "✅" if o.ok else "❌"
-        error = "" if o.ok else f"{o.status}: {o.error}\n"
+        error = "" if o.ok else table_cell(f"{o.status}: {o.error}")
 
         if not o.ok:
             log = read_result(client, comp_id, args.log_file) or "log unavailable"
-            error += "\n" + "\n".join(["", "Capsule log (tail):", "```", *log.splitlines()[-LOG_TAIL_LINES:], "```"])
+            tail = "<br>".join(table_cell(line) for line in log.splitlines()[-LOG_TAIL_LINES:])
+            error += f"<br><br>Capsule log (tail):<pre>{tail}</pre>"
 
         results_rows.append(f"| {result} | [{comp_id}]({run_url}) | {error} |")
 
