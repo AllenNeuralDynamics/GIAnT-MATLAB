@@ -65,6 +65,7 @@ jobs:
           --capsule-id "${{ vars.CO_INTEGRATION_TEST_CAPSULE_ID }}"
           --data-asset-ids "$DATA_ASSET_IDS"
           --commit "$TEST_COMMIT"
+          --cancel-on-failure
 
       - name: Set final status
         if: always()

@@ -5,7 +5,7 @@ Contract with the capsule:
 - It accepts the commit under test as a named parameter (``--commit-param``).
 - It exits 0 when every check passes and nonzero when a check fails or cannot run.
 
-The check passes when every capsule run completes with exit code 0. A failed, cancelled, or timed-out run fails the check and cancels the runs still in flight.
+The check passes when every capsule run completes with exit code 0. If ``--cancel-on-failure`` is set, a failed, cancelled, or timed-out run fails the check and cancels the runs still in flight.
 """
 
 import argparse
