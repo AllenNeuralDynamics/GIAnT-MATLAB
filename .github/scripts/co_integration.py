@@ -101,7 +101,7 @@ def main() -> int:
     passed = len(outcomes) - len(failures)
     summary_table = "\n".join([
         "| Total Tests | Passed ✅ | Failed ❌ |",
-        "| -- | -- | -- | -- |",
+        "| -- | -- | -- |",
         f"| {len(outcomes)} | {passed} | {len(failures)} |",
     ])
     results_rows = ["| Result | Dataset | Error Message |", "| --- | --- | --- |"]
