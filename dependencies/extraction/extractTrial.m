@@ -53,9 +53,9 @@ else
     doParallel = false;
 end
 
-saveDir = '';
-if isfield(params, 'saveSubproblemsDir') && ~isempty(params.saveSubproblemsDir)
-    saveDir = subproblemFolder(params);
+saveDir = subproblemSaveDir(params);
+if ~isempty(saveDir)
+    saveDir = subproblemFolder(params, saveDir);
     saveTrialInputs(saveDir, sources, selPix, params, nProblems);
 end
 
@@ -129,7 +129,7 @@ else
 end
 end
 
-function d = subproblemFolder(params)
+function d = subproblemFolder(params, root)
 %the folder for this trial's saved subproblems, inside params.saveSubproblemsDir:
 %named by the trial's imaging path, index and file (params.subproblemSource, which
 %SILo and processAllTrials_Async set when saving), so that the trials of a run
@@ -147,7 +147,7 @@ end
 if isempty(parts)
     [~, parts{1}] = fileparts(tempname); %unique, and leaves the random number generator alone
 end
-d = fullfile(char(params.saveSubproblemsDir), strjoin(parts, '_'));
+d = fullfile(root, strjoin(parts, '_'));
 if ~exist(d, 'dir')
     mkdir(d);
 end

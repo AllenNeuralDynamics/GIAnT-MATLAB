@@ -19,9 +19,11 @@ function R = subproblemRefitTest(files, varargin)
 %   params.photonScale), at each source's peak pixel: an event of size a
 %   adds a to the peak pixel at the event's peak.
 %
-%   Events are the peaks of each source's true X (local maxima above 2% of
-%   its largest, at least L = ceil(2.5*params.tau_full) samples apart; not
-%   within 5 samples of the start or L+3 of the end), each with the window
+%   Events are the peaks of each source's true X: local maxima above 2% of
+%   its largest, with no other such maximum in the L = ceil(2.5*tau_full)
+%   samples before them (so an event does not sit on the tail of another;
+%   a maximum that follows a skipped one closely is skipped too), not
+%   within 5 samples of the start or L+3 of the end. Each has the window
 %   from 2 samples before its peak to L after. An event is found when the
 %   refit's activity mass in its window is above 25% of the truth's.
 %
