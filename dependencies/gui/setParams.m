@@ -12,6 +12,7 @@ switch fnName
         % params.minBaseline = 1/10;              tooltips.minBaseline = 'minimum baseline for source extraction (normalized photon units)';
         params.lambda = 0.9;              tooltips.lambda = 'regularizer for source extraction';
         params.phi = 0;                 tooltips.phi = 'parameter for how much to relax L1 during debiasing';
+        params.debiasVariance = {'''fixed''','''model'''}; tooltips.debiasVariance = 'the variance term of the final (debias) refit of the activity: ''fixed'' (held at the fit''s value at the refit''s start: a weighted least-squares refit) or ''model'' (follows the fit, the behaviour before this option; it rewards larger activity, so found events came out about 30% too large on SLAP2, issue #56). Only dF_denoised, events and SNR depend on it';
         params.denoiseWindow_s = 0.2;   tooltips.denoiseWindow_s= 'the timescale on which signals can be smoothed when denoising, seconds';
         params.baselineWindow_Glu_s = 4; tooltips.baselineWindow_Glu_s= 'timescale for calculating F0 in glutamate channel, seconds';
         params.baselineWindow_Ca_s = 4;  tooltips.baselineWindow_Ca_s= 'timescale for calculating F0 in calcium channel, seconds';

@@ -66,6 +66,25 @@ classdef TestSubproblemRefitTest < matlab.unittest.TestCase
             testCase.verifyEqual(Rh.events.size, 0.5 * R1.events.size, 'RelTol', 1e-12, 'the same events, half as large');
         end
 
+        function testDebiasRecoversFoundEvents(testCase)
+            % issue #56: with the debias refit's variance term following the
+            % model (debiasVariance 'model', the behaviour before the option),
+            % found events come out too large at these photon counts; held
+            % fixed (the default), they are recovered within 10% at every size
+            R = subproblemRefitTest(testCase.Folder, 'Verbose', false, ...
+                'Variants', {struct(), struct('debiasVariance', 'model')}, 'VariantNames', {'default', 'model'}, ...
+                'TruthParams', struct('debiasVariance', 'model'));
+            b = R.bySize(~R.bySize.injected & R.bySize.n >= 10, :);
+            def = b(b.variant == "default", :);
+            testCase.assertNotEmpty(def);
+            testCase.verifyGreaterThan(def.recoveredFound, 0.9, 'default: found events recovered within 10%');
+            testCase.verifyLessThan(def.recoveredFound, 1.1, 'default: found events recovered within 10%');
+            mdl = b(b.variant == "model", :);
+            testCase.verifyGreaterThan(sum(R.events.refitMass(R.events.variant == "model" & R.events.found)) / ...
+                sum(R.events.trueMass(R.events.variant == "model" & R.events.found)), 1.15, 'model: found events too large');
+            testCase.verifyEqual(mdl.n, def.n, 'the same events');
+        end
+
         function testOverridesUpdateDerivedParams(testCase)
             % a base parameter's derived fields follow it: tau_s at its
             % saved value changes nothing, another value changes the kernel

@@ -255,6 +255,20 @@ classdef TestSILo < matlab.unittest.TestCase
                 'SILo:peakMethod');
         end
 
+        function testRejectsUnknownDebiasVariance(testCase)
+            testCase.writeDataset(1);
+
+            testCase.verifyError(@() testCase.runSILo(testCase.Dr, struct('debiasVariance', 'poisson')), ...
+                'SILo:debiasVariance');
+        end
+
+        function testEmptyDebiasVarianceMeansFixed(testCase)
+            testCase.writeDataset(1);
+
+            params = testCase.runSILo(testCase.Dr, struct('debiasVariance', []));
+            testCase.verifyEqual(params.debiasVariance, 'fixed');
+        end
+
         function testWritesSummariesAndTrialTable(testCase)
             testCase.writeDataset(1);
 
